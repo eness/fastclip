@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
@@ -85,6 +86,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             var newFilePath = CreateNewJpegFromClipboard(image, explorerContext.CurrentFolderPath);
+            RevealInExplorer(newFilePath);
             ShowBalloon("New file created", Path.GetFileName(newFilePath));
         }
         catch (NotSupportedException ex)
@@ -145,7 +147,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         EnsureDirectoryIsWritable(folderPath);
 
-        var newFilePath = Path.Combine(folderPath, $"{GenerateRandomName()}.jpg");
+        var newFilePath = GetUniqueJpegPath(folderPath);
         SaveJpeg(image, newFilePath, 95L);
         return newFilePath;
     }
@@ -224,6 +226,29 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return new string(buffer);
     }
 
+    private static string GetUniqueJpegPath(string folderPath)
+    {
+        string candidatePath;
+
+        do
+        {
+            candidatePath = Path.Combine(folderPath, $"{GenerateRandomName()}.jpg");
+        }
+        while (File.Exists(candidatePath));
+
+        return candidatePath;
+    }
+
+    private static void RevealInExplorer(string path)
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = $"/select,\"{path}\"",
+            UseShellExecute = true
+        });
+    }
+
     private static void SaveJpeg(Image image, string targetPath, long quality)
     {
         var encoder = ImageCodecInfo.GetImageEncoders()
@@ -291,7 +316,8 @@ internal static class ExplorerSelection
         }
 
         dynamic shell = Activator.CreateInstance(shellType)!;
-        string? fallbackFolderPath = null;
+        ExplorerContext? activeContext = null;
+        ExplorerContext? fallbackContext = null;
 
         try
         {
@@ -308,28 +334,21 @@ internal static class ExplorerSelection
                     }
 
                     var folderPath = GetFolderPath(window);
-                    if (!string.IsNullOrWhiteSpace(folderPath) && fallbackFolderPath is null)
-                    {
-                        fallbackFolderPath = folderPath;
-                    }
+                    var selectedFilePath = GetSelectedFilePath(window);
+                    var context = new ExplorerContext(selectedFilePath, folderPath);
 
-                    var selectedItems = window.Document?.SelectedItems();
-                    if (selectedItems is not null && selectedItems.Count == 1)
+                    if (new IntPtr(Convert.ToInt64(window.HWND)) == foregroundWindow)
                     {
-                        var item = selectedItems.Item(0);
-                        if (item is not null)
+                        activeContext = context;
+                        if (!context.IsEmpty)
                         {
-                            var path = item.Path as string;
-                            if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
-                            {
-                                return new ExplorerContext(path, folderPath);
-                            }
+                            return context;
                         }
                     }
 
-                    if (new IntPtr(Convert.ToInt64(window.HWND)) == foregroundWindow && !string.IsNullOrWhiteSpace(folderPath))
+                    if (fallbackContext is null && !context.IsEmpty)
                     {
-                        fallbackFolderPath = folderPath;
+                        fallbackContext = context;
                     }
                 }
                 catch
@@ -342,7 +361,7 @@ internal static class ExplorerSelection
             Marshal.FinalReleaseComObject(shell);
         }
 
-        return new ExplorerContext(null, fallbackFolderPath);
+        return activeContext ?? fallbackContext ?? ExplorerContext.Empty;
     }
 
     private static string? GetFolderPath(dynamic window)
@@ -356,10 +375,36 @@ internal static class ExplorerSelection
             return null;
         }
     }
+
+    private static string? GetSelectedFilePath(dynamic window)
+    {
+        try
+        {
+            var selectedItems = window.Document?.SelectedItems();
+            if (selectedItems is null || selectedItems.Count != 1)
+            {
+                return null;
+            }
+
+            var item = selectedItems.Item(0);
+            if (item is null)
+            {
+                return null;
+            }
+
+            var path = item.Path as string;
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? path : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 internal sealed record ExplorerContext(string? SelectedFilePath, string? CurrentFolderPath)
 {
+    public bool IsEmpty => string.IsNullOrWhiteSpace(SelectedFilePath) && string.IsNullOrWhiteSpace(CurrentFolderPath);
     public static ExplorerContext Empty { get; } = new(null, null);
 }
 
