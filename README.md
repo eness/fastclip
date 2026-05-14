@@ -32,9 +32,10 @@ The app saves the clipboard image into the selected file using that file's exten
 
 ## 📦 Build
 
-This repository includes a GitHub Actions workflow that publishes a self-contained `win-x64` build.
+This repository includes a GitHub Actions workflow that publishes both framework-dependent and self-contained `win-x64` builds.
 
-The generated artifact includes a ready-to-run `ClipboardToSelectedFile.exe`, so the target machine does not need a separate `.NET` installation.
+- `framework-dependent`: much smaller, but requires the appropriate `.NET` runtime on the target machine
+- `self-contained`: larger, but does not require a separate `.NET` installation
 
 ## 👤 Author
 

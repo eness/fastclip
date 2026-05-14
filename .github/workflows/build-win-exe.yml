@@ -18,6 +18,14 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Publish framework-dependent build
+        run: >
+          dotnet publish
+          -c Release
+          -r win-x64
+          --self-contained false
+          -o publish/framework-dependent
+
       - name: Publish self-contained exe
         run: >
           dotnet publish
@@ -27,9 +35,16 @@ jobs:
           /p:PublishSingleFile=true
           /p:IncludeNativeLibrariesForSelfExtract=true
           /p:PublishTrimmed=false
+          -o publish/self-contained
 
-      - name: Upload artifact
+      - name: Upload framework-dependent artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClipboardToSelectedFile-win-x64
-          path: ClipboardToSelectedFile/bin/Release/net8.0-windows/win-x64/publish/
+          name: ClipboardToSelectedFile-framework-dependent-win-x64
+          path: ClipboardToSelectedFile/publish/framework-dependent/
+
+      - name: Upload self-contained artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipboardToSelectedFile-self-contained-win-x64
+          path: ClipboardToSelectedFile/publish/self-contained/
