@@ -1,6 +1,5 @@
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
@@ -86,7 +85,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             var newFilePath = CreateNewJpegFromClipboard(image, explorerContext.CurrentFolderPath);
-            RevealInExplorer(newFilePath);
             ShowBalloon("New file created", Path.GetFileName(newFilePath));
         }
         catch (NotSupportedException ex)
@@ -237,16 +235,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         while (File.Exists(candidatePath));
 
         return candidatePath;
-    }
-
-    private static void RevealInExplorer(string path)
-    {
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = "explorer.exe",
-            Arguments = $"/select,\"{path}\"",
-            UseShellExecute = true
-        });
     }
 
     private static void SaveJpeg(Image image, string targetPath, long quality)
