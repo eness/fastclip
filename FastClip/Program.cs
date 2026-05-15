@@ -869,18 +869,18 @@ internal sealed class AboutForm : Form
             TextAlign = ContentAlignment.MiddleCenter
         };
 
-        var websiteLink = BuildLinkLabel("enes.dev", "https://enes.dev", new Point(250, 396), new Size(120, 28));
+        var websiteLink = BuildLinkLabel("enes.dev", "https://enes.dev", new Point(280, 396), new Size(92, 28));
         var separatorLabel = new Label
         {
             AutoSize = false,
-            Location = new Point(380, 396),
-            Size = new Size(40, 28),
+            Location = new Point(374, 396),
+            Size = new Size(28, 28),
             Text = "•",
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 12f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = Color.FromArgb(125, 125, 125)
         };
-        var xLink = BuildLinkLabel("x.com/enes_dev", "https://x.com/enes_dev", new Point(430, 396), new Size(140, 28));
+        var xLink = BuildLinkLabel("x.com/enes_dev", "https://x.com/enes_dev", new Point(404, 396), new Size(136, 28));
 
         var closeButton = new Button
         {
@@ -1014,7 +1014,7 @@ internal sealed class PasteSession
                 },
                 Compression = new CompressionOptions
                 {
-                    Enabled = compressionAvailable,
+                    Enabled = false,
                     AvailableForCurrentTarget = compressionAvailable,
                     TargetFormat = compressionFormat,
                     JpegQuality = 85,
@@ -1047,7 +1047,6 @@ internal sealed class PasteSession
             _ => CompressionTargetFormat.None
         };
 
-        Options.Compression.Enabled = compressionFormat != CompressionTargetFormat.None;
         Options.Compression.AvailableForCurrentTarget = compressionFormat != CompressionTargetFormat.None;
         Options.Compression.TargetFormat = compressionFormat;
     }
@@ -1184,7 +1183,7 @@ internal sealed class AdvancedPasteForm : Form
         var widthLabel = new Label
         {
             AutoSize = true,
-            Location = new Point(24, 34),
+            Location = new Point(24, 42),
             Text = "Width"
         };
 
@@ -1209,7 +1208,7 @@ internal sealed class AdvancedPasteForm : Form
         var heightLabel = new Label
         {
             AutoSize = true,
-            Location = new Point(264, 34),
+            Location = new Point(264, 42),
             Text = "Height"
         };
 
