@@ -1,4 +1,4 @@
-![Clipboard To Selected File](./banner.png)
+![Clipboard To Selected File](./banner.jpg)
 
 # Clipboard To Selected File
 
