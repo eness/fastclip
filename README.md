@@ -10,9 +10,6 @@
 - Replace the selected image or create a new file in the current folder
 - Trigger actions with a customizable global hotkey from the tray
 - Use `Advanced Mode` for resize, format selection, and optional JPEG or PNG compression before saving
-
-![FastClip Preview](./preview.jpg)
-
 - Save advanced settings and skip the dialog next time when needed
 - Built for fast, reliable clipboard-to-file workflows on Windows
 
@@ -33,6 +30,8 @@
 3. Press `Ctrl+Shift+V`, or your configured hotkey.
 
 The app saves the clipboard image into the selected file using that file's extension and format. If no file is selected, it creates a new randomly named file in the current Explorer folder. In `Advanced Mode`, you can choose the output format before saving.
+
+![FastClip Preview](./preview.jpg)
 
 ## 📦 Build
 
