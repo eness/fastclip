@@ -93,6 +93,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Change Hot Key", null, (_, _) => ChangeHotkey());
         menu.Items.Add(_advancedModeMenuItem);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("About", null, (_, _) => ShowAbout());
         menu.Items.Add("How to use", null, (_, _) =>
             ShowBalloon("Usage", $"Copy an image to the clipboard, select a file in Explorer, then press {_currentHotkey.ToDisplayString()}."));
         menu.Items.Add("Exit", null, (_, _) => ExitThread());
@@ -140,6 +141,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _appSettings = _appSettings with { AdvancedModeEnabled = isEnabled };
         _appSettingsStore.Save(_appSettings);
+    }
+
+    private void ShowAbout()
+    {
+        using var dialog = new AboutForm();
+        dialog.ShowDialog();
     }
 
     private bool TryRegisterCurrentHotkey(bool showError)
@@ -228,11 +235,25 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             if (_appSettings.AdvancedModeEnabled)
             {
-                var shouldSave = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
-                if (!shouldSave)
+                if (_appSettings.AutoApplyAdvancedSettings && _appSettings.SavedAdvancedSettings is not null)
                 {
-                    ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
-                    return;
+                    ApplySavedAdvancedSettings(pasteSession, _appSettings.SavedAdvancedSettings);
+                }
+                else
+                {
+                    var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
+                    if (!dialogResult.ShouldSave)
+                    {
+                        ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
+                        return;
+                    }
+
+                    _appSettings = _appSettings with
+                    {
+                        AutoApplyAdvancedSettings = dialogResult.AutoApplyNextTime,
+                        SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
+                    };
+                    _appSettingsStore.Save(_appSettings);
                 }
             }
 
@@ -271,19 +292,59 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return _imageFileWriter.ReplaceImageFile(image, session.ExplorerContext.SelectedFilePath!, session.Options);
         }
 
-        return _imageFileWriter.CreateNewJpeg(image, session.ExplorerContext.CurrentFolderPath!, session.Options);
+        return _imageFileWriter.CreateNewImage(image, session.ExplorerContext.CurrentFolderPath!, session.OutputExtension, session.Options);
     }
 
-    private Task<bool> ShowAdvancedPasteDialogAsync(PasteSession session)
+    private static void ApplySavedAdvancedSettings(PasteSession session, AdvancedSettingsSnapshot savedSettings)
     {
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.Options.Resize.KeepAspectRatio = savedSettings.KeepAspectRatio;
+        session.Options.Resize.ScalePercent = savedSettings.ScalePercent;
+
+        if (savedSettings.ScalePercent.HasValue)
+        {
+            var percent = savedSettings.ScalePercent.Value / 100d;
+            session.Options.Resize.Width = Math.Clamp((int)Math.Round(session.Options.Resize.OriginalWidth * percent), 1, session.Options.Resize.OriginalWidth);
+            session.Options.Resize.Height = Math.Clamp((int)Math.Round(session.Options.Resize.OriginalHeight * percent), 1, session.Options.Resize.OriginalHeight);
+        }
+        else if (savedSettings.KeepAspectRatio)
+        {
+            var width = Math.Clamp((int)Math.Round(session.Options.Resize.OriginalWidth * savedSettings.WidthRatio), 1, session.Options.Resize.OriginalWidth);
+            var height = Math.Clamp((int)Math.Round(session.Options.Resize.OriginalHeight * savedSettings.WidthRatio), 1, session.Options.Resize.OriginalHeight);
+            session.Options.Resize.Width = width;
+            session.Options.Resize.Height = height;
+        }
+        else
+        {
+            session.Options.Resize.Width = Math.Clamp((int)Math.Round(session.Options.Resize.OriginalWidth * savedSettings.WidthRatio), 1, session.Options.Resize.OriginalWidth);
+            session.Options.Resize.Height = Math.Clamp((int)Math.Round(session.Options.Resize.OriginalHeight * savedSettings.HeightRatio), 1, session.Options.Resize.OriginalHeight);
+        }
+
+        if (session.Options.Compression.AvailableForCurrentTarget)
+        {
+            session.Options.Compression.JpegQuality = Math.Clamp(savedSettings.JpegQuality, 0, 100);
+            session.Options.Compression.PngOptimizationLevel = Math.Clamp(savedSettings.PngOptimizationLevel, 0, 6);
+        }
+
+        if (session.TargetKind == PasteTargetKind.NewFile &&
+            !string.IsNullOrWhiteSpace(savedSettings.OutputExtension) &&
+            PasteSession.IsSupportedNewFileExtension(savedSettings.OutputExtension))
+        {
+            session.SetOutputExtension(savedSettings.OutputExtension);
+        }
+    }
+
+    private Task<AdvancedPasteDialogResult> ShowAdvancedPasteDialogAsync(PasteSession session)
+    {
+        var tcs = new TaskCompletionSource<AdvancedPasteDialogResult>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _uiContext.Post(_ =>
         {
             try
             {
                 using var dialog = new AdvancedPasteForm(session);
-                tcs.TrySetResult(dialog.ShowDialog() == DialogResult.OK);
+                tcs.TrySetResult(new AdvancedPasteDialogResult(
+                    dialog.ShowDialog() == DialogResult.OK,
+                    dialog.AutoApplyNextTime));
             }
             catch (Exception ex)
             {
@@ -459,7 +520,20 @@ internal sealed class AppSettingsStore
                 return AppSettings.Default;
             }
 
-            return new AppSettings(new HotkeyRegistration(HotkeyRegistration.Default.Id, modifiers, key), model.AdvancedModeEnabled);
+            return new AppSettings(
+                new HotkeyRegistration(HotkeyRegistration.Default.Id, modifiers, key),
+                model.AdvancedModeEnabled,
+                model.AutoApplyAdvancedSettings,
+                model.SavedAdvancedSettings is null
+                    ? null
+                    : new AdvancedSettingsSnapshot(
+                        model.SavedAdvancedSettings.KeepAspectRatio,
+                        model.SavedAdvancedSettings.ScalePercent,
+                        model.SavedAdvancedSettings.WidthRatio,
+                        model.SavedAdvancedSettings.HeightRatio,
+                        model.SavedAdvancedSettings.JpegQuality,
+                        model.SavedAdvancedSettings.PngOptimizationLevel,
+                        model.SavedAdvancedSettings.OutputExtension));
         }
         catch
         {
@@ -482,7 +556,20 @@ internal sealed class AppSettingsStore
             Alt = (settings.Hotkey.Modifiers & NativeMethods.MOD_ALT) != 0,
             Win = (settings.Hotkey.Modifiers & NativeMethods.MOD_WIN) != 0,
             Key = settings.Hotkey.Key.ToString(),
-            AdvancedModeEnabled = settings.AdvancedModeEnabled
+            AdvancedModeEnabled = settings.AdvancedModeEnabled,
+            AutoApplyAdvancedSettings = settings.AutoApplyAdvancedSettings,
+            SavedAdvancedSettings = settings.SavedAdvancedSettings is null
+                ? null
+                : new AdvancedSettingsSnapshotModel
+                {
+                    KeepAspectRatio = settings.SavedAdvancedSettings.KeepAspectRatio,
+                    ScalePercent = settings.SavedAdvancedSettings.ScalePercent,
+                    WidthRatio = settings.SavedAdvancedSettings.WidthRatio,
+                    HeightRatio = settings.SavedAdvancedSettings.HeightRatio,
+                    JpegQuality = settings.SavedAdvancedSettings.JpegQuality,
+                    PngOptimizationLevel = settings.SavedAdvancedSettings.PngOptimizationLevel,
+                    OutputExtension = settings.SavedAdvancedSettings.OutputExtension
+                }
         };
 
         var json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
@@ -498,12 +585,53 @@ internal sealed class AppSettingsModel
     public bool Win { get; set; }
     public string Key { get; set; } = Keys.V.ToString();
     public bool AdvancedModeEnabled { get; set; }
+    public bool AutoApplyAdvancedSettings { get; set; }
+    public AdvancedSettingsSnapshotModel? SavedAdvancedSettings { get; set; }
 }
 
-internal sealed record AppSettings(HotkeyRegistration Hotkey, bool AdvancedModeEnabled)
+internal sealed class AdvancedSettingsSnapshotModel
 {
-    public static AppSettings Default { get; } = new(HotkeyRegistration.Default, false);
+    public bool KeepAspectRatio { get; set; }
+    public int? ScalePercent { get; set; }
+    public double WidthRatio { get; set; }
+    public double HeightRatio { get; set; }
+    public int JpegQuality { get; set; }
+    public int PngOptimizationLevel { get; set; }
+    public string OutputExtension { get; set; } = ".jpg";
 }
+
+internal sealed record AppSettings(
+    HotkeyRegistration Hotkey,
+    bool AdvancedModeEnabled,
+    bool AutoApplyAdvancedSettings,
+    AdvancedSettingsSnapshot? SavedAdvancedSettings)
+{
+    public static AppSettings Default { get; } = new(HotkeyRegistration.Default, false, false, null);
+}
+
+internal sealed record AdvancedSettingsSnapshot(
+    bool KeepAspectRatio,
+    int? ScalePercent,
+    double WidthRatio,
+    double HeightRatio,
+    int JpegQuality,
+    int PngOptimizationLevel,
+    string OutputExtension)
+{
+    public static AdvancedSettingsSnapshot FromPasteOptions(PasteOptions options)
+    {
+        return new AdvancedSettingsSnapshot(
+            options.Resize.KeepAspectRatio,
+            options.Resize.ScalePercent,
+            options.Resize.Width / (double)Math.Max(1, options.Resize.OriginalWidth),
+            options.Resize.Height / (double)Math.Max(1, options.Resize.OriginalHeight),
+            options.Compression.JpegQuality,
+            options.Compression.PngOptimizationLevel,
+            options.OutputExtension);
+    }
+}
+
+internal sealed record AdvancedPasteDialogResult(bool ShouldSave, bool AutoApplyNextTime);
 
 internal sealed class HotkeySettingsForm : Form
 {
@@ -670,6 +798,115 @@ internal sealed class HotkeySettingsForm : Form
     ];
 }
 
+internal sealed class AboutForm : Form
+{
+    public AboutForm()
+    {
+        Text = "About FastClip";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterScreen;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        ClientSize = new Size(420, 270);
+        BackColor = Color.FromArgb(247, 248, 244);
+
+        var headerPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 96,
+            BackColor = Color.FromArgb(230, 242, 232)
+        };
+
+        var titleLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            Text = "FastClip",
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI Semibold", 22f, FontStyle.Bold, GraphicsUnit.Point),
+            ForeColor = Color.FromArgb(34, 74, 48)
+        };
+
+        headerPanel.Controls.Add(titleLabel);
+
+        var nameLabel = new Label
+        {
+            AutoSize = false,
+            Location = new Point(32, 118),
+            Size = new Size(356, 24),
+            Text = "Enes Sonmez",
+            Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold, GraphicsUnit.Point),
+            ForeColor = Color.FromArgb(32, 32, 32),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+
+        var descriptionLabel = new Label
+        {
+            AutoSize = false,
+            Location = new Point(42, 146),
+            Size = new Size(336, 42),
+            Text = "Clipboard-to-file workflow utility for fast image replacement and export on Windows.",
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = Color.FromArgb(90, 90, 90),
+            TextAlign = ContentAlignment.MiddleCenter
+        };
+
+        var websiteLink = BuildLinkLabel("enes.dev", "https://enes.dev", new Point(32, 198));
+        var xLink = BuildLinkLabel("x.com/enes_dev", "https://x.com/enes_dev", new Point(32, 226));
+
+        var closeButton = new Button
+        {
+            Text = "Close",
+            Size = new Size(84, 30),
+            Location = new Point(304, 224),
+            BackColor = Color.White
+        };
+        closeButton.Click += (_, _) => Close();
+
+        Controls.Add(headerPanel);
+        Controls.Add(nameLabel);
+        Controls.Add(descriptionLabel);
+        Controls.Add(websiteLink);
+        Controls.Add(xLink);
+        Controls.Add(closeButton);
+    }
+
+    private static LinkLabel BuildLinkLabel(string text, string url, Point location)
+    {
+        var link = new LinkLabel
+        {
+            AutoSize = false,
+            Location = location,
+            Size = new Size(240, 24),
+            Text = text,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point),
+            LinkColor = Color.FromArgb(40, 98, 72),
+            ActiveLinkColor = Color.FromArgb(24, 72, 50),
+            VisitedLinkColor = Color.FromArgb(40, 98, 72)
+        };
+
+        link.Click += (_, _) => OpenExternalUrl(url);
+        return link;
+    }
+
+    private static void OpenExternalUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = url,
+                UseShellExecute = true
+            });
+        }
+        catch
+        {
+        }
+    }
+}
+
 internal enum PasteTargetKind
 {
     None,
@@ -679,6 +916,8 @@ internal enum PasteTargetKind
 
 internal sealed class PasteSession
 {
+    private static readonly string[] SupportedNewFileExtensions = [".jpg", ".png", ".bmp", ".gif", ".tif"];
+
     public static PasteSession Create(Image image, ExplorerContext explorerContext)
     {
         var targetKind = !string.IsNullOrWhiteSpace(explorerContext.SelectedFilePath)
@@ -691,7 +930,13 @@ internal sealed class PasteSession
             : targetKind == PasteTargetKind.NewFile
                 ? ".jpg"
                 : string.Empty;
-        var compressionAvailable = outputExtension is ".jpg" or ".jpeg";
+        var compressionFormat = outputExtension switch
+        {
+            ".jpg" or ".jpeg" => CompressionTargetFormat.Jpeg,
+            ".png" => CompressionTargetFormat.Png,
+            _ => CompressionTargetFormat.None
+        };
+        var compressionAvailable = compressionFormat != CompressionTargetFormat.None;
 
         return new PasteSession
         {
@@ -701,6 +946,7 @@ internal sealed class PasteSession
             OutputExtension = outputExtension,
             Options = new PasteOptions
             {
+                OutputExtension = outputExtension,
                 Resize = new ResizeOptions
                 {
                     OriginalWidth = image.Width,
@@ -713,21 +959,63 @@ internal sealed class PasteSession
                 {
                     Enabled = compressionAvailable,
                     AvailableForCurrentTarget = compressionAvailable,
-                    JpegQuality = 85
+                    TargetFormat = compressionFormat,
+                    JpegQuality = 85,
+                    PngOptimizationLevel = 4
                 },
             }
         };
     }
 
+    public static bool IsSupportedNewFileExtension(string extension)
+    {
+        return SupportedNewFileExtensions.Contains(NormalizeExtension(extension), StringComparer.OrdinalIgnoreCase);
+    }
+
+    public void SetOutputExtension(string extension)
+    {
+        var normalizedExtension = NormalizeExtension(extension);
+        if (TargetKind == PasteTargetKind.ExistingFile || !IsSupportedNewFileExtension(normalizedExtension))
+        {
+            return;
+        }
+
+        OutputExtension = normalizedExtension;
+        Options.OutputExtension = normalizedExtension;
+
+        var compressionFormat = normalizedExtension switch
+        {
+            ".jpg" or ".jpeg" => CompressionTargetFormat.Jpeg,
+            ".png" => CompressionTargetFormat.Png,
+            _ => CompressionTargetFormat.None
+        };
+
+        Options.Compression.Enabled = compressionFormat != CompressionTargetFormat.None;
+        Options.Compression.AvailableForCurrentTarget = compressionFormat != CompressionTargetFormat.None;
+        Options.Compression.TargetFormat = compressionFormat;
+    }
+
+    private static string NormalizeExtension(string extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            return string.Empty;
+        }
+
+        var normalizedExtension = extension.StartsWith('.') ? extension : $".{extension}";
+        return normalizedExtension.ToLowerInvariant();
+    }
+
     public required Image SourceImage { get; init; }
     public required ExplorerContext ExplorerContext { get; init; }
     public required PasteTargetKind TargetKind { get; init; }
-    public required string OutputExtension { get; init; }
+    public required string OutputExtension { get; private set; }
     public required PasteOptions Options { get; init; }
 }
 
 internal sealed class PasteOptions
 {
+    public required string OutputExtension { get; set; }
     public required ResizeOptions Resize { get; set; }
     public required CompressionOptions Compression { get; set; }
 }
@@ -747,7 +1035,16 @@ internal sealed class CompressionOptions
 {
     public required bool Enabled { get; set; }
     public required bool AvailableForCurrentTarget { get; set; }
+    public required CompressionTargetFormat TargetFormat { get; set; }
     public required int JpegQuality { get; set; }
+    public required int PngOptimizationLevel { get; set; }
+}
+
+internal enum CompressionTargetFormat
+{
+    None = 0,
+    Jpeg = 1,
+    Png = 2
 }
 
 internal sealed class AdvancedPasteForm : Form
@@ -760,19 +1057,26 @@ internal sealed class AdvancedPasteForm : Form
     private const int HeightInputX = 226;
     private readonly PasteSession _session;
     private readonly TabControl _tabControl;
+    private readonly TabPage _compressionTab;
     private readonly NumericUpDown _widthInput;
     private readonly NumericUpDown _heightInput;
     private readonly AspectRatioIconButton _linkButton;
     private readonly ComboBox _scalePresetComboBox;
+    private readonly ComboBox _formatComboBox;
     private readonly TrackBar _compressionQualityTrackBar;
     private readonly Label _compressionQualityValueLabel;
+    private readonly TrackBar _pngOptimizationTrackBar;
+    private readonly Label _pngOptimizationValueLabel;
     private readonly Label _compressionEstimateLabel;
+    private readonly CheckBox _autoApplyCheckBox;
     private readonly System.Windows.Forms.Timer _compressionEstimateTimer;
     private readonly ToolTip _toolTip;
     private readonly ImageTransformPipeline _imageTransformPipeline;
     private readonly MozJpegEncoder _mozJpegEncoder;
+    private readonly OxipngEncoder _oxipngEncoder;
     private bool _isUpdatingControls;
     private int _compressionEstimateVersion;
+    public bool AutoApplyNextTime => _autoApplyCheckBox.Checked;
 
     public AdvancedPasteForm(PasteSession session)
     {
@@ -780,6 +1084,7 @@ internal sealed class AdvancedPasteForm : Form
         _toolTip = new ToolTip();
         _imageTransformPipeline = new ImageTransformPipeline();
         _mozJpegEncoder = new MozJpegEncoder();
+        _oxipngEncoder = new OxipngEncoder();
         _compressionEstimateTimer = new System.Windows.Forms.Timer
         {
             Interval = 400
@@ -793,18 +1098,18 @@ internal sealed class AdvancedPasteForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(400, 260);
+        ClientSize = new Size(400, 300);
 
         _tabControl = new TabControl
         {
             Location = new Point(16, 16),
-            Size = new Size(368, 180)
+            Size = new Size(368, 220)
         };
 
         var resizeTab = new TabPage("Resize");
         _tabControl.TabPages.Add(resizeTab);
-        var compressionTab = new TabPage("Compress");
-        _tabControl.TabPages.Add(compressionTab);
+        _compressionTab = new TabPage("Compress");
+        _tabControl.TabPages.Add(_compressionTab);
 
         var widthLabel = new Label
         {
@@ -868,6 +1173,29 @@ internal sealed class AdvancedPasteForm : Form
         }
         _scalePresetComboBox.SelectedIndexChanged += (_, _) => OnScalePresetChanged();
 
+        var formatLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(16, 144),
+            Text = "Format"
+        };
+
+        _formatComboBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(20, 168),
+            Width = 321
+        };
+        _formatComboBox.Items.AddRange(
+        [
+            new FormatOption(".jpg", "JPG"),
+            new FormatOption(".png", "PNG"),
+            new FormatOption(".bmp", "BMP"),
+            new FormatOption(".gif", "GIF"),
+            new FormatOption(".tif", "TIFF")
+        ]);
+        _formatComboBox.SelectedIndexChanged += (_, _) => OnFormatChanged();
+
         resizeTab.Controls.Add(widthLabel);
         resizeTab.Controls.Add(_widthInput);
         resizeTab.Controls.Add(_linkButton);
@@ -875,80 +1203,38 @@ internal sealed class AdvancedPasteForm : Form
         resizeTab.Controls.Add(_heightInput);
         resizeTab.Controls.Add(presetLabel);
         resizeTab.Controls.Add(_scalePresetComboBox);
+        resizeTab.Controls.Add(formatLabel);
+        resizeTab.Controls.Add(_formatComboBox);
 
-        if (_session.Options.Compression.AvailableForCurrentTarget)
-        {
-            var compressionLabel = new Label
-            {
-                AutoSize = true,
-                Location = new Point(16, 20),
-                Text = "Quality"
-            };
-
-            _compressionQualityTrackBar = new TrackBar
-            {
-                Location = new Point(20, 44),
-                Width = 300,
-                Minimum = 0,
-                Maximum = 100,
-                TickFrequency = 10,
-                SmallChange = 1,
-                LargeChange = 5,
-                Value = _session.Options.Compression.JpegQuality
-            };
-            _compressionQualityTrackBar.ValueChanged += (_, _) => OnCompressionQualityChanged();
-
-            _compressionQualityValueLabel = new Label
-            {
-                AutoSize = true,
-                Location = new Point(326, 52),
-                Text = _session.Options.Compression.JpegQuality.ToString()
-            };
-
-            _compressionEstimateLabel = new Label
-            {
-                AutoSize = false,
-                Location = new Point(20, 104),
-                Size = new Size(320, 32),
-                Text = "Estimated output size: calculating..."
-            };
-
-            compressionTab.Controls.Add(compressionLabel);
-            compressionTab.Controls.Add(_compressionQualityTrackBar);
-            compressionTab.Controls.Add(_compressionQualityValueLabel);
-            compressionTab.Controls.Add(_compressionEstimateLabel);
-        }
-        else
-        {
-            _compressionQualityTrackBar = new TrackBar();
-            _compressionQualityValueLabel = new Label();
-            _compressionEstimateLabel = new Label();
-
-            var unsupportedLabel = new Label
-            {
-                AutoSize = false,
-                Location = new Point(20, 24),
-                Size = new Size(315, 64),
-                Text = "Compression is currently available only for JPEG output.",
-            };
-
-            compressionTab.Enabled = false;
-            compressionTab.Controls.Add(unsupportedLabel);
-        }
+        _compressionQualityTrackBar = new TrackBar();
+        _compressionQualityValueLabel = new Label();
+        _pngOptimizationTrackBar = new TrackBar();
+        _pngOptimizationValueLabel = new Label();
+        _compressionEstimateLabel = new Label();
 
         var cancelButton = new Button
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(228, 212),
+            Location = new Point(228, 252),
             Width = 75
         };
+
+        _autoApplyCheckBox = new CheckBox
+        {
+            AutoSize = false,
+            Location = new Point(20, 248),
+            Size = new Size(190, 36),
+            Text = "Use these settings next time",
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        _toolTip.SetToolTip(_autoApplyCheckBox, "Apply these settings automatically next time and skip this window.");
 
         var saveButton = new Button
         {
             Text = "Save",
             DialogResult = DialogResult.OK,
-            Location = new Point(309, 212),
+            Location = new Point(309, 252),
             Width = 75
         };
         saveButton.Click += (_, _) => OnSave();
@@ -957,10 +1243,13 @@ internal sealed class AdvancedPasteForm : Form
         CancelButton = cancelButton;
 
         Controls.Add(_tabControl);
+        Controls.Add(_autoApplyCheckBox);
         Controls.Add(cancelButton);
         Controls.Add(saveButton);
 
         UpdatePresetSelection();
+        UpdateFormatSelection();
+        RebuildCompressionTab();
         ScheduleCompressionEstimate();
     }
 
@@ -1034,15 +1323,43 @@ internal sealed class AdvancedPasteForm : Form
         ApplyScaledDimensions(width, resizeBasedOnWidth: true, percent);
     }
 
+    private void OnFormatChanged()
+    {
+        if (_isUpdatingControls || _session.TargetKind != PasteTargetKind.NewFile || _formatComboBox.SelectedItem is not FormatOption option)
+        {
+            return;
+        }
+
+        _session.SetOutputExtension(option.Extension);
+        RebuildCompressionTab();
+        ScheduleCompressionEstimate();
+    }
+
     private void OnCompressionQualityChanged()
     {
-        if (_isUpdatingControls || !_session.Options.Compression.AvailableForCurrentTarget)
+        if (_isUpdatingControls ||
+            !_session.Options.Compression.AvailableForCurrentTarget ||
+            _session.Options.Compression.TargetFormat != CompressionTargetFormat.Jpeg)
         {
             return;
         }
 
         _session.Options.Compression.JpegQuality = _compressionQualityTrackBar.Value;
         _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
+        ScheduleCompressionEstimate();
+    }
+
+    private void OnPngOptimizationLevelChanged()
+    {
+        if (_isUpdatingControls ||
+            !_session.Options.Compression.AvailableForCurrentTarget ||
+            _session.Options.Compression.TargetFormat != CompressionTargetFormat.Png)
+        {
+            return;
+        }
+
+        _session.Options.Compression.PngOptimizationLevel = _pngOptimizationTrackBar.Value;
+        _pngOptimizationValueLabel.Text = _pngOptimizationTrackBar.Value.ToString();
         ScheduleCompressionEstimate();
     }
 
@@ -1108,13 +1425,162 @@ internal sealed class AdvancedPasteForm : Form
         }
     }
 
+    private void UpdateFormatSelection()
+    {
+        _isUpdatingControls = true;
+        try
+        {
+            var selected = _formatComboBox.Items
+                .OfType<FormatOption>()
+                .FirstOrDefault(item => string.Equals(item.Extension, _session.OutputExtension, StringComparison.OrdinalIgnoreCase));
+
+            if (selected is null)
+            {
+                selected = new FormatOption(_session.OutputExtension, _session.OutputExtension.TrimStart('.').ToUpperInvariant());
+                _formatComboBox.Items.Add(selected);
+            }
+
+            _formatComboBox.SelectedItem = selected ?? _formatComboBox.Items.OfType<FormatOption>().FirstOrDefault();
+            _formatComboBox.Enabled = _session.TargetKind == PasteTargetKind.NewFile;
+        }
+        finally
+        {
+            _isUpdatingControls = false;
+        }
+    }
+
+    private void RebuildCompressionTab()
+    {
+        _compressionTab.SuspendLayout();
+        try
+        {
+            _compressionTab.Controls.Clear();
+
+            if (_session.Options.Compression.AvailableForCurrentTarget)
+            {
+                _compressionTab.Enabled = true;
+
+                if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Jpeg)
+                {
+                    var compressionLabel = new Label
+                    {
+                        AutoSize = true,
+                        Location = new Point(16, 20),
+                        Text = "Quality"
+                    };
+
+                    _compressionQualityTrackBar.Minimum = 0;
+                    _compressionQualityTrackBar.Maximum = 100;
+                    _compressionQualityTrackBar.TickFrequency = 10;
+                    _compressionQualityTrackBar.SmallChange = 1;
+                    _compressionQualityTrackBar.LargeChange = 5;
+                    _compressionQualityTrackBar.Location = new Point(20, 44);
+                    _compressionQualityTrackBar.Width = 300;
+                    _compressionQualityTrackBar.ValueChanged -= CompressionQualityTrackBarValueChanged;
+                    _compressionQualityTrackBar.Value = Math.Clamp(_session.Options.Compression.JpegQuality, 0, 100);
+                    _compressionQualityTrackBar.ValueChanged += CompressionQualityTrackBarValueChanged;
+
+                    _compressionQualityValueLabel.AutoSize = true;
+                    _compressionQualityValueLabel.Location = new Point(326, 52);
+                    _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
+
+                    _compressionEstimateLabel.AutoSize = false;
+                    _compressionEstimateLabel.Location = new Point(20, 104);
+                    _compressionEstimateLabel.Size = new Size(320, 32);
+                    _compressionEstimateLabel.Text = "Estimated output size: calculating...";
+
+                    _compressionTab.Controls.Add(compressionLabel);
+                    _compressionTab.Controls.Add(_compressionQualityTrackBar);
+                    _compressionTab.Controls.Add(_compressionQualityValueLabel);
+                    _compressionTab.Controls.Add(_compressionEstimateLabel);
+                }
+                else if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Png)
+                {
+                    var compressionLabel = new Label
+                    {
+                        AutoSize = true,
+                        Location = new Point(16, 20),
+                        Text = "Optimization Level"
+                    };
+
+                    _pngOptimizationTrackBar.Minimum = 0;
+                    _pngOptimizationTrackBar.Maximum = 6;
+                    _pngOptimizationTrackBar.TickFrequency = 1;
+                    _pngOptimizationTrackBar.SmallChange = 1;
+                    _pngOptimizationTrackBar.LargeChange = 1;
+                    _pngOptimizationTrackBar.Location = new Point(20, 44);
+                    _pngOptimizationTrackBar.Width = 300;
+                    _pngOptimizationTrackBar.ValueChanged -= PngOptimizationTrackBarValueChanged;
+                    _pngOptimizationTrackBar.Value = Math.Clamp(_session.Options.Compression.PngOptimizationLevel, 0, 6);
+                    _pngOptimizationTrackBar.ValueChanged += PngOptimizationTrackBarValueChanged;
+
+                    _pngOptimizationValueLabel.AutoSize = true;
+                    _pngOptimizationValueLabel.Location = new Point(326, 52);
+                    _pngOptimizationValueLabel.Text = _pngOptimizationTrackBar.Value.ToString();
+
+                    var hintLabel = new Label
+                    {
+                        AutoSize = false,
+                        Location = new Point(20, 76),
+                        Size = new Size(320, 20),
+                        Text = "Higher levels are slower and usually compress better."
+                    };
+
+                    _compressionEstimateLabel.AutoSize = false;
+                    _compressionEstimateLabel.Location = new Point(20, 104);
+                    _compressionEstimateLabel.Size = new Size(330, 48);
+                    _compressionEstimateLabel.Text = "Estimated output size: calculating...";
+
+                    _compressionTab.Controls.Add(compressionLabel);
+                    _compressionTab.Controls.Add(_pngOptimizationTrackBar);
+                    _compressionTab.Controls.Add(_pngOptimizationValueLabel);
+                    _compressionTab.Controls.Add(hintLabel);
+                    _compressionTab.Controls.Add(_compressionEstimateLabel);
+                }
+            }
+            else
+            {
+                _compressionTab.Enabled = false;
+                _compressionTab.Controls.Add(new Label
+                {
+                    AutoSize = false,
+                    Location = new Point(20, 24),
+                    Size = new Size(315, 64),
+                    Text = "Compression is currently available only for JPEG and PNG output."
+                });
+            }
+        }
+        finally
+        {
+            _compressionTab.ResumeLayout();
+        }
+    }
+
+    private void CompressionQualityTrackBarValueChanged(object? sender, EventArgs e)
+    {
+        OnCompressionQualityChanged();
+    }
+
+    private void PngOptimizationTrackBarValueChanged(object? sender, EventArgs e)
+    {
+        OnPngOptimizationLevelChanged();
+    }
+
     private void OnSave()
     {
         UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, _session.Options.Resize.ScalePercent);
         if (_session.Options.Compression.AvailableForCurrentTarget)
         {
-            _session.Options.Compression.JpegQuality = _compressionQualityTrackBar.Value;
-            _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
+            if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Jpeg)
+            {
+                _session.Options.Compression.JpegQuality = _compressionQualityTrackBar.Value;
+                _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
+            }
+            else if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Png)
+            {
+                _session.Options.Compression.PngOptimizationLevel = _pngOptimizationTrackBar.Value;
+                _pngOptimizationValueLabel.Text = _pngOptimizationTrackBar.Value.ToString();
+            }
         }
     }
 
@@ -1154,6 +1620,8 @@ internal sealed class AdvancedPasteForm : Form
         var resizeWidth = _session.Options.Resize.Width;
         var resizeHeight = _session.Options.Resize.Height;
         var quality = _session.Options.Compression.JpegQuality;
+        var pngOptimizationLevel = _session.Options.Compression.PngOptimizationLevel;
+        var compressionTargetFormat = _session.Options.Compression.TargetFormat;
 
         _ = Task.Run(() =>
         {
@@ -1162,6 +1630,7 @@ internal sealed class AdvancedPasteForm : Form
                 imageClone,
                 new PasteOptions
                 {
+                    OutputExtension = _session.OutputExtension,
                     Resize = new ResizeOptions
                     {
                         OriginalWidth = _session.Options.Resize.OriginalWidth,
@@ -1175,11 +1644,18 @@ internal sealed class AdvancedPasteForm : Form
                     {
                         Enabled = true,
                         AvailableForCurrentTarget = true,
-                        JpegQuality = quality
+                        TargetFormat = compressionTargetFormat,
+                        JpegQuality = quality,
+                        PngOptimizationLevel = pngOptimizationLevel
                     }
                 });
 
-            return _mozJpegEncoder.EstimateSize(transformedImage, quality);
+            return compressionTargetFormat switch
+            {
+                CompressionTargetFormat.Jpeg => _mozJpegEncoder.EstimateSize(transformedImage, quality),
+                CompressionTargetFormat.Png => _oxipngEncoder.EstimateSize(transformedImage, pngOptimizationLevel),
+                _ => CompressionEstimateResult.Unavailable()
+            };
         }).ContinueWith(task =>
         {
             if (IsDisposed || version != _compressionEstimateVersion)
@@ -1215,6 +1691,11 @@ internal sealed class AdvancedPasteForm : Form
     }
 
     private static readonly int[] ScalePresets = [90, 80, 70, 60, 50, 40, 30, 20, 10];
+}
+
+internal sealed record FormatOption(string Extension, string Label)
+{
+    public override string ToString() => Label;
 }
 
 internal sealed class AspectRatioIconButton : Control
@@ -1670,6 +2151,7 @@ internal sealed class ImageFileWriter
 {
     private const long JpegQuality = 95L;
     private readonly MozJpegEncoder _mozJpegEncoder = new();
+    private readonly OxipngEncoder _oxipngEncoder = new();
 
     public ImageSaveResult ReplaceImageFile(Image image, string targetPath, PasteOptions options)
     {
@@ -1710,13 +2192,18 @@ internal sealed class ImageFileWriter
         return new ImageSaveResult(targetPath, warningMessage);
     }
 
-    public ImageSaveResult CreateNewJpeg(Image image, string folderPath, PasteOptions options)
+    public ImageSaveResult CreateNewImage(Image image, string folderPath, string extension, PasteOptions options)
     {
         ValidateTargetDirectory(folderPath);
+        extension = NormalizeExtension(extension);
+        if (!SupportedExtensions.Contains(extension))
+        {
+            throw new NotSupportedException("Only png, jpg, jpeg, bmp, gif, tif, and tiff files are supported.");
+        }
 
         for (var attempt = 0; attempt < 16; attempt++)
         {
-            var candidatePath = Path.Combine(folderPath, $"{GenerateRandomName()}.jpg");
+            var candidatePath = Path.Combine(folderPath, $"{GenerateRandomName()}{extension}");
 
             try
             {
@@ -1815,8 +2302,7 @@ internal sealed class ImageFileWriter
         switch (extension)
         {
             case ".png":
-                image.Save(targetPath, ImageFormat.Png);
-                return null;
+                return SavePng(image, targetPath, options);
             case ".bmp":
                 image.Save(targetPath, ImageFormat.Bmp);
                 return null;
@@ -1902,6 +2388,21 @@ internal sealed class ImageFileWriter
             : null;
     }
 
+    private string? SavePng(Image image, string targetPath, PasteOptions options)
+    {
+        image.Save(targetPath, ImageFormat.Png);
+
+        if (!options.Compression.Enabled ||
+            !options.Compression.AvailableForCurrentTarget ||
+            options.Compression.TargetFormat != CompressionTargetFormat.Png)
+        {
+            return null;
+        }
+
+        var result = _oxipngEncoder.TryOptimizeFile(targetPath, options.Compression.PngOptimizationLevel);
+        return result.Success ? null : "oxipng unavailable, standard PNG fallback used";
+    }
+
     private static void SaveJpeg(Image image, Stream targetStream, long quality)
     {
         var encoder = ImageCodecInfo.GetImageEncoders()
@@ -1955,6 +2456,16 @@ internal sealed class ImageFileWriter
         ".tif",
         ".tiff"
     };
+
+    private static string NormalizeExtension(string extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension))
+        {
+            return string.Empty;
+        }
+
+        return extension.StartsWith('.') ? extension.ToLowerInvariant() : $".{extension.ToLowerInvariant()}";
+    }
 }
 
 internal sealed record ImageSaveResult(string SavedPath, string? WarningMessage);
@@ -2106,6 +2617,129 @@ internal sealed record MozJpegEncodeResult(bool Success, string? ErrorMessage)
     public static MozJpegEncodeResult Failed(string? errorMessage) => new(false, errorMessage);
 }
 
+internal sealed class OxipngEncoder
+{
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+    public OxipngOptimizeResult TryOptimizeFile(string filePath, int optimizationLevel)
+    {
+        var executablePath = OxipngLocator.TryFindEncoder();
+        if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+        {
+            return OxipngOptimizeResult.Failed("oxipng executable not found.");
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                Arguments = $"-o {Math.Clamp(optimizationLevel, 0, 6)} --strip safe --alpha -q \"{filePath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory
+            };
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return OxipngOptimizeResult.Failed("oxipng process could not be started.");
+            }
+
+            if (!process.WaitForExit((int)Timeout.TotalMilliseconds))
+            {
+                TryKill(process);
+                return OxipngOptimizeResult.Failed("oxipng process timed out.");
+            }
+
+            var standardError = process.StandardError.ReadToEnd();
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            if (process.ExitCode != 0)
+            {
+                return OxipngOptimizeResult.Failed(string.IsNullOrWhiteSpace(standardError) ? standardOutput : standardError);
+            }
+
+            return File.Exists(filePath)
+                ? OxipngOptimizeResult.Succeeded()
+                : OxipngOptimizeResult.Failed("oxipng did not preserve the output file.");
+        }
+        catch (Exception ex)
+        {
+            return OxipngOptimizeResult.Failed(ex.Message);
+        }
+    }
+
+    public CompressionEstimateResult EstimateSize(Image image, int optimizationLevel)
+    {
+        var tempOutputPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.png");
+
+        try
+        {
+            image.Save(tempOutputPath, ImageFormat.Png);
+            var standardSize = new FileInfo(tempOutputPath).Length;
+            var optimizeResult = TryOptimizeFile(tempOutputPath, optimizationLevel);
+            if (optimizeResult.Success && File.Exists(tempOutputPath))
+            {
+                return CompressionEstimateResult.FromBytes(new FileInfo(tempOutputPath).Length, usedFallback: false);
+            }
+
+            return CompressionEstimateResult.FromBytes(standardSize, usedFallback: true);
+        }
+        finally
+        {
+            TryDeleteFile(tempOutputPath);
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+}
+
+internal static class OxipngLocator
+{
+    public static string? TryFindEncoder()
+    {
+        var baseDirectory = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            Path.Combine(baseDirectory, "Tools", "oxipng", "win-x64", "oxipng.exe"),
+            Path.Combine(baseDirectory, "oxipng.exe")
+        };
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+}
+
+internal sealed record OxipngOptimizeResult(bool Success, string? ErrorMessage)
+{
+    public static OxipngOptimizeResult Succeeded() => new(true, null);
+    public static OxipngOptimizeResult Failed(string? errorMessage) => new(false, errorMessage);
+}
+
 internal sealed record CompressionEstimateResult(string DisplayText)
 {
     public static CompressionEstimateResult FromBytes(long bytes, bool usedFallback)
@@ -2115,6 +2749,11 @@ internal sealed record CompressionEstimateResult(string DisplayText)
             usedFallback
                 ? $"Estimated output size: {kiloBytes} KB (standard estimate)"
                 : $"Estimated output size: {kiloBytes} KB");
+    }
+
+    public static CompressionEstimateResult Unavailable()
+    {
+        return new CompressionEstimateResult("Estimated output size: unavailable");
     }
 }
 
