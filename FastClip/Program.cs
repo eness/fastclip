@@ -1069,12 +1069,12 @@ internal enum CompressionTargetFormat
 
 internal sealed class AdvancedPasteForm : Form
 {
-    private const int WidthInputX = 20;
-    private const int InputTopY = 44;
-    private const int InputWidth = 115;
-    private const int LinkButtonWidth = 28;
-    private const int LinkButtonHeight = 28;
-    private const int HeightInputX = 226;
+    private const int WidthInputX = 24;
+    private const int HeightInputX = 264;
+    private const int InputTopY = 58;
+    private const int InputWidth = 146;
+    private const int LinkButtonWidth = 30;
+    private const int LinkButtonHeight = 30;
     private readonly PasteSession _session;
     private readonly TabControl _tabControl;
     private readonly TabPage _compressionTab;
@@ -1118,23 +1118,35 @@ internal sealed class AdvancedPasteForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(400, 300);
+        Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        BackColor = Color.FromArgb(248, 250, 252);
+        ClientSize = new Size(468, 362);
 
         _tabControl = new TabControl
         {
-            Location = new Point(16, 16),
-            Size = new Size(368, 220)
+            Location = new Point(18, 18),
+            Size = new Size(432, 274)
         };
 
         var resizeTab = new TabPage("Resize");
+        resizeTab.BackColor = Color.White;
         _tabControl.TabPages.Add(resizeTab);
         _compressionTab = new TabPage("Compress");
+        _compressionTab.BackColor = Color.White;
         _tabControl.TabPages.Add(_compressionTab);
+
+        var resizeCaptionLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(24, 18),
+            Text = "Adjust output size and file format before saving.",
+            ForeColor = Color.FromArgb(91, 103, 112)
+        };
 
         var widthLabel = new Label
         {
             AutoSize = true,
-            Location = new Point(16, 20),
+            Location = new Point(24, 34),
             Text = "Width"
         };
 
@@ -1159,7 +1171,7 @@ internal sealed class AdvancedPasteForm : Form
         var heightLabel = new Label
         {
             AutoSize = true,
-            Location = new Point(222, 20),
+            Location = new Point(264, 34),
             Text = "Height"
         };
 
@@ -1176,15 +1188,15 @@ internal sealed class AdvancedPasteForm : Form
         var presetLabel = new Label
         {
             AutoSize = true,
-            Location = new Point(16, 88),
+            Location = new Point(24, 110),
             Text = "Scale Preset"
         };
 
         _scalePresetComboBox = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Location = new Point(20, 112),
-            Width = 321
+            Location = new Point(24, 134),
+            Width = 386
         };
         _scalePresetComboBox.Items.Add("Custom");
         foreach (var preset in ScalePresets)
@@ -1196,15 +1208,15 @@ internal sealed class AdvancedPasteForm : Form
         var formatLabel = new Label
         {
             AutoSize = true,
-            Location = new Point(16, 132),
+            Location = new Point(24, 182),
             Text = "Format"
         };
 
         _formatComboBox = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Location = new Point(20, 162),
-            Width = 321
+            Location = new Point(24, 208),
+            Width = 386
         };
         _formatComboBox.Items.AddRange(
         [
@@ -1216,6 +1228,7 @@ internal sealed class AdvancedPasteForm : Form
         ]);
         _formatComboBox.SelectedIndexChanged += (_, _) => OnFormatChanged();
 
+        resizeTab.Controls.Add(resizeCaptionLabel);
         resizeTab.Controls.Add(widthLabel);
         resizeTab.Controls.Add(_widthInput);
         resizeTab.Controls.Add(_linkButton);
@@ -1236,15 +1249,16 @@ internal sealed class AdvancedPasteForm : Form
         {
             Text = "Cancel",
             DialogResult = DialogResult.Cancel,
-            Location = new Point(228, 252),
-            Width = 75
+            Location = new Point(286, 312),
+            Width = 78,
+            Height = 34
         };
 
         _autoApplyCheckBox = new CheckBox
         {
             AutoSize = false,
-            Location = new Point(20, 248),
-            Size = new Size(190, 36),
+            Location = new Point(20, 308),
+            Size = new Size(236, 40),
             Text = "Use these settings next time",
             TextAlign = ContentAlignment.MiddleLeft
         };
@@ -1254,8 +1268,9 @@ internal sealed class AdvancedPasteForm : Form
         {
             Text = "Save",
             DialogResult = DialogResult.OK,
-            Location = new Point(309, 252),
-            Width = 75
+            Location = new Point(372, 312),
+            Width = 78,
+            Height = 34
         };
         saveButton.Click += (_, _) => OnSave();
 
@@ -1482,10 +1497,18 @@ internal sealed class AdvancedPasteForm : Form
 
                 if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Jpeg)
                 {
+                    var captionLabel = new Label
+                    {
+                        AutoSize = true,
+                        Location = new Point(24, 18),
+                        Text = "Control JPEG quality before saving.",
+                        ForeColor = Color.FromArgb(91, 103, 112)
+                    };
+
                     var compressionLabel = new Label
                     {
                         AutoSize = true,
-                        Location = new Point(16, 20),
+                        Location = new Point(24, 46),
                         Text = "Quality"
                     };
 
@@ -1494,21 +1517,23 @@ internal sealed class AdvancedPasteForm : Form
                     _compressionQualityTrackBar.TickFrequency = 10;
                     _compressionQualityTrackBar.SmallChange = 1;
                     _compressionQualityTrackBar.LargeChange = 5;
-                    _compressionQualityTrackBar.Location = new Point(20, 44);
-                    _compressionQualityTrackBar.Width = 300;
+                    _compressionQualityTrackBar.Location = new Point(24, 72);
+                    _compressionQualityTrackBar.Width = 336;
                     _compressionQualityTrackBar.ValueChanged -= CompressionQualityTrackBarValueChanged;
                     _compressionQualityTrackBar.Value = Math.Clamp(_session.Options.Compression.JpegQuality, 0, 100);
                     _compressionQualityTrackBar.ValueChanged += CompressionQualityTrackBarValueChanged;
 
                     _compressionQualityValueLabel.AutoSize = true;
-                    _compressionQualityValueLabel.Location = new Point(326, 52);
+                    _compressionQualityValueLabel.Location = new Point(370, 78);
                     _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
 
                     _compressionEstimateLabel.AutoSize = false;
-                    _compressionEstimateLabel.Location = new Point(20, 104);
-                    _compressionEstimateLabel.Size = new Size(320, 32);
+                    _compressionEstimateLabel.Location = new Point(24, 144);
+                    _compressionEstimateLabel.Size = new Size(386, 40);
                     _compressionEstimateLabel.Text = "Estimated output size: calculating...";
+                    _compressionEstimateLabel.ForeColor = Color.FromArgb(63, 74, 84);
 
+                    _compressionTab.Controls.Add(captionLabel);
                     _compressionTab.Controls.Add(compressionLabel);
                     _compressionTab.Controls.Add(_compressionQualityTrackBar);
                     _compressionTab.Controls.Add(_compressionQualityValueLabel);
@@ -1516,10 +1541,18 @@ internal sealed class AdvancedPasteForm : Form
                 }
                 else if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Png)
                 {
+                    var captionLabel = new Label
+                    {
+                        AutoSize = true,
+                        Location = new Point(24, 18),
+                        Text = "Apply lossless PNG optimization with oxipng.",
+                        ForeColor = Color.FromArgb(91, 103, 112)
+                    };
+
                     var compressionLabel = new Label
                     {
                         AutoSize = true,
-                        Location = new Point(16, 20),
+                        Location = new Point(24, 46),
                         Text = "Optimization Level"
                     };
 
@@ -1528,29 +1561,32 @@ internal sealed class AdvancedPasteForm : Form
                     _pngOptimizationTrackBar.TickFrequency = 1;
                     _pngOptimizationTrackBar.SmallChange = 1;
                     _pngOptimizationTrackBar.LargeChange = 1;
-                    _pngOptimizationTrackBar.Location = new Point(20, 44);
-                    _pngOptimizationTrackBar.Width = 300;
+                    _pngOptimizationTrackBar.Location = new Point(24, 72);
+                    _pngOptimizationTrackBar.Width = 336;
                     _pngOptimizationTrackBar.ValueChanged -= PngOptimizationTrackBarValueChanged;
                     _pngOptimizationTrackBar.Value = Math.Clamp(_session.Options.Compression.PngOptimizationLevel, 0, 6);
                     _pngOptimizationTrackBar.ValueChanged += PngOptimizationTrackBarValueChanged;
 
                     _pngOptimizationValueLabel.AutoSize = true;
-                    _pngOptimizationValueLabel.Location = new Point(326, 52);
+                    _pngOptimizationValueLabel.Location = new Point(370, 78);
                     _pngOptimizationValueLabel.Text = _pngOptimizationTrackBar.Value.ToString();
 
                     var hintLabel = new Label
                     {
                         AutoSize = false,
-                        Location = new Point(20, 76),
-                        Size = new Size(320, 20),
-                        Text = "Higher levels are slower and usually compress better."
+                        Location = new Point(24, 112),
+                        Size = new Size(386, 20),
+                        Text = "Higher levels are slower and usually compress better.",
+                        ForeColor = Color.FromArgb(91, 103, 112)
                     };
 
                     _compressionEstimateLabel.AutoSize = false;
-                    _compressionEstimateLabel.Location = new Point(20, 104);
-                    _compressionEstimateLabel.Size = new Size(330, 48);
+                    _compressionEstimateLabel.Location = new Point(24, 148);
+                    _compressionEstimateLabel.Size = new Size(386, 44);
                     _compressionEstimateLabel.Text = "Estimated output size: calculating...";
+                    _compressionEstimateLabel.ForeColor = Color.FromArgb(63, 74, 84);
 
+                    _compressionTab.Controls.Add(captionLabel);
                     _compressionTab.Controls.Add(compressionLabel);
                     _compressionTab.Controls.Add(_pngOptimizationTrackBar);
                     _compressionTab.Controls.Add(_pngOptimizationValueLabel);
@@ -1564,9 +1600,10 @@ internal sealed class AdvancedPasteForm : Form
                 _compressionTab.Controls.Add(new Label
                 {
                     AutoSize = false,
-                    Location = new Point(20, 24),
-                    Size = new Size(315, 64),
-                    Text = "Compression is currently available only for JPEG and PNG output."
+                    Location = new Point(24, 28),
+                    Size = new Size(386, 64),
+                    Text = "Compression is currently available only for JPEG and PNG output.",
+                    ForeColor = Color.FromArgb(91, 103, 112)
                 });
             }
         }
