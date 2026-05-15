@@ -993,7 +993,7 @@ internal sealed class AspectRatioIconButton : Control
             true);
 
         Cursor = Cursors.Hand;
-        BackColor = Color.Transparent;
+        BackColor = SystemColors.Control;
         Size = new Size(40, 26);
         TabStop = true;
     }
@@ -1017,7 +1017,8 @@ internal sealed class AspectRatioIconButton : Control
 
         var bounds = ClientRectangle;
         bounds.Inflate(-1, -1);
-        using var backgroundBrush = new SolidBrush(Color.White);
+        var backgroundColor = Parent?.BackColor ?? SystemColors.Control;
+        using var backgroundBrush = new SolidBrush(backgroundColor);
         e.Graphics.FillRectangle(backgroundBrush, bounds);
         e.Graphics.DrawRectangle(borderPen, bounds);
 
