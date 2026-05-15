@@ -199,7 +199,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            return Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+            return Icon.ExtractAssociatedIcon(System.Windows.Forms.Application.ExecutablePath) ?? SystemIcons.Application;
         }
         catch
         {

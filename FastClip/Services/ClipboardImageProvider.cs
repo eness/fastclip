@@ -181,9 +181,9 @@ internal sealed class ClipboardImageProvider : IClipboardImageProvider
 
             return new ClipboardOwnerProfile(
                 processName,
-                requiresWarmup: false,
-                busyMessage: "The clipboard owner is still preparing the image data.",
-                timeoutMessage: "The clipboard owner did not finish rendering the image in time.");
+                false,
+                "The clipboard owner is still preparing the image data.",
+                "The clipboard owner did not finish rendering the image in time.");
         }
         catch
         {
@@ -241,14 +241,14 @@ internal sealed class ClipboardImageProvider : IClipboardImageProvider
     {
         public static ClipboardOwnerProfile Photoshop { get; } = new(
             "Photoshop",
-            requiresWarmup: true,
-            busyMessage: "Photoshop is still preparing the copied image. Wait a moment and try again.",
-            timeoutMessage: "Photoshop did not finish rendering the copied image in time. Wait a moment and try again.");
+            true,
+            "Photoshop is still preparing the copied image. Wait a moment and try again.",
+            "Photoshop did not finish rendering the copied image in time. Wait a moment and try again.");
 
         public static ClipboardOwnerProfile Unknown { get; } = new(
             null,
-            requiresWarmup: false,
-            busyMessage: "The clipboard owner is still preparing the image data.",
-            timeoutMessage: "The clipboard owner did not finish rendering the image in time.");
+            false,
+            "The clipboard owner is still preparing the image data.",
+            "The clipboard owner did not finish rendering the image in time.");
     }
 }

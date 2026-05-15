@@ -9,7 +9,7 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        Application.ThreadException += (_, args) => GlobalErrorHandler.Handle("ui-thread", args.Exception);
+        System.Windows.Forms.Application.ThreadException += (_, args) => GlobalErrorHandler.Handle("ui-thread", args.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
             GlobalErrorHandler.Handle("appdomain", args.ExceptionObject as Exception ?? new Exception("Unknown unhandled exception."));
         TaskScheduler.UnobservedTaskException += (_, args) =>
@@ -19,6 +19,6 @@ internal static class Program
         };
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new TrayApplicationContext());
+        System.Windows.Forms.Application.Run(new TrayApplicationContext());
     }
 }
