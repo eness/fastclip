@@ -721,6 +721,12 @@ internal sealed class ResizeOptions
 
 internal sealed class AdvancedPasteForm : Form
 {
+    private const int WidthInputX = 20;
+    private const int InputTopY = 44;
+    private const int InputWidth = 115;
+    private const int LinkButtonWidth = 28;
+    private const int LinkButtonHeight = 28;
+    private const int HeightInputX = 226;
     private readonly PasteSession _session;
     private readonly TabControl _tabControl;
     private readonly NumericUpDown _widthInput;
@@ -761,8 +767,8 @@ internal sealed class AdvancedPasteForm : Form
 
         _widthInput = new NumericUpDown
         {
-            Location = new Point(20, 44),
-            Width = 115,
+            Location = new Point(WidthInputX, InputTopY),
+            Width = InputWidth,
             Minimum = 1,
             Maximum = session.Options.Resize.OriginalWidth,
             Value = session.Options.Resize.Width
@@ -771,8 +777,8 @@ internal sealed class AdvancedPasteForm : Form
 
         _linkButton = new AspectRatioIconButton
         {
-            Location = new Point(147, 42),
-            Size = new Size(40, 26)
+            Location = new Point(GetLinkButtonX(), GetLinkButtonY()),
+            Size = new Size(LinkButtonWidth, LinkButtonHeight)
         };
         _linkButton.Click += (_, _) => ToggleAspectRatio();
         UpdateLinkButtonState();
@@ -786,8 +792,8 @@ internal sealed class AdvancedPasteForm : Form
 
         _heightInput = new NumericUpDown
         {
-            Location = new Point(226, 44),
-            Width = 115,
+            Location = new Point(HeightInputX, InputTopY),
+            Width = InputWidth,
             Minimum = 1,
             Maximum = session.Options.Resize.OriginalHeight,
             Value = session.Options.Resize.Height
@@ -883,7 +889,7 @@ internal sealed class AdvancedPasteForm : Form
             return;
         }
 
-        UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, null);
+        UpdateWidthOnly((int)_widthInput.Value);
     }
 
     private void OnHeightChanged()
@@ -899,7 +905,7 @@ internal sealed class AdvancedPasteForm : Form
             return;
         }
 
-        UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, null);
+        UpdateHeightOnly((int)_heightInput.Value);
     }
 
     private void OnScalePresetChanged()
@@ -929,6 +935,16 @@ internal sealed class AdvancedPasteForm : Form
         height = Math.Min(height, original.OriginalHeight);
 
         UpdateControls(width, height, scalePercent);
+    }
+
+    private void UpdateWidthOnly(int width)
+    {
+        UpdateResizeOptions(width, _session.Options.Resize.Height, null);
+    }
+
+    private void UpdateHeightOnly(int height)
+    {
+        UpdateResizeOptions(_session.Options.Resize.Width, height, null);
     }
 
     private void UpdateResizeOptions(int width, int height, int? scalePercent)
@@ -975,6 +991,18 @@ internal sealed class AdvancedPasteForm : Form
         UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, _session.Options.Resize.ScalePercent);
     }
 
+    private static int GetLinkButtonX()
+    {
+        var widthRight = WidthInputX + InputWidth;
+        var gapCenter = widthRight + ((HeightInputX - widthRight) / 2);
+        return gapCenter - (LinkButtonWidth / 2);
+    }
+
+    private static int GetLinkButtonY()
+    {
+        return InputTopY - ((LinkButtonHeight - SystemInformation.ComboBoxHeight) / 2);
+    }
+
     private static readonly int[] ScalePresets = [90, 80, 70, 60, 50, 40, 30, 20, 10];
 }
 
@@ -994,7 +1022,7 @@ internal sealed class AspectRatioIconButton : Control
 
         Cursor = Cursors.Hand;
         BackColor = SystemColors.Control;
-        Size = new Size(40, 26);
+        Size = new Size(28, 28);
         TabStop = true;
     }
 
@@ -1006,10 +1034,13 @@ internal sealed class AspectRatioIconButton : Control
 
         var iconColor = IsLinked
             ? Color.FromArgb(34, 160, 74)
-            : Color.FromArgb(128, 160, 160, 160);
+            : Color.FromArgb(150, 184, 184, 184);
+        var borderColor = IsLinked
+            ? Color.FromArgb(190, 219, 234, 201)
+            : Color.FromArgb(220, 225, 225, 225);
 
-        using var borderPen = new Pen(Color.FromArgb(220, 220, 220));
-        using var iconPen = new Pen(iconColor, 1.9f)
+        using var borderPen = new Pen(borderColor);
+        using var iconPen = new Pen(iconColor, 1.8f)
         {
             StartCap = System.Drawing.Drawing2D.LineCap.Round,
             EndCap = System.Drawing.Drawing2D.LineCap.Round
@@ -1019,7 +1050,9 @@ internal sealed class AspectRatioIconButton : Control
         bounds.Inflate(-1, -1);
         var backgroundColor = Parent?.BackColor ?? SystemColors.Control;
         using var backgroundBrush = new SolidBrush(backgroundColor);
-        e.Graphics.FillRectangle(backgroundBrush, bounds);
+        using var buttonBrush = new SolidBrush(Color.FromArgb(250, backgroundColor));
+        e.Graphics.FillRectangle(backgroundBrush, ClientRectangle);
+        e.Graphics.FillRectangle(buttonBrush, bounds);
         e.Graphics.DrawRectangle(borderPen, bounds);
 
         DrawChainIcon(e.Graphics, iconPen, bounds);
@@ -1062,14 +1095,13 @@ internal sealed class AspectRatioIconButton : Control
 
     private static void DrawChainIcon(Graphics graphics, Pen pen, Rectangle bounds)
     {
-        var leftLink = new RectangleF(bounds.Left + 7, bounds.Top + 8, 10, 7);
-        var rightLink = new RectangleF(bounds.Left + 19, bounds.Top + 11, 10, 7);
+        var centerY = bounds.Top + (bounds.Height / 2f);
+        var leftLink = new RectangleF(bounds.Left + 4f, centerY - 4.5f, 8f, 9f);
+        var rightLink = new RectangleF(bounds.Left + 15f, centerY - 4.5f, 8f, 9f);
 
-        graphics.DrawArc(pen, leftLink, 215, 290);
-        graphics.DrawArc(pen, rightLink, 35, 290);
-
-        graphics.DrawLine(pen, bounds.Left + 14, bounds.Top + 12, bounds.Left + 18, bounds.Top + 14);
-        graphics.DrawLine(pen, bounds.Left + 17, bounds.Top + 11, bounds.Left + 21, bounds.Top + 13);
+        graphics.DrawArc(pen, leftLink, 45, 270);
+        graphics.DrawArc(pen, rightLink, 225, 270);
+        graphics.DrawLine(pen, bounds.Left + 10.5f, centerY, bounds.Left + 16.5f, centerY);
     }
 }
 
