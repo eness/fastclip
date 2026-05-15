@@ -5,13 +5,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>ClipboardToSelectedFile</AssemblyName>
-    <RootNamespace>ClipboardToSelectedFile</RootNamespace>
+    <AssemblyName>FastClip</AssemblyName>
+    <RootNamespace>FastClip</RootNamespace>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
-    <Title>Clipboard To Selected File</Title>
+    <Title>FastClip</Title>
     <Description>Small Windows tray utility for saving the current clipboard image into the selected file in Windows Explorer.</Description>
     <Company>Enes Sonmez</Company>
-    <Product>Clipboard To Selected File</Product>
+    <Product>FastClip</Product>
     <Authors>Enes Sonmez</Authors>
     <Copyright>Copyright (c) Enes Sonmez</Copyright>
     <Version>1.0.0</Version>

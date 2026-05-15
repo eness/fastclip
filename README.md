@@ -4,6 +4,19 @@
 
 🖼️ A lightweight Windows tray utility that takes the current image from your clipboard and writes it into the file currently selected in Windows Explorer.
 
+## Features
+
+- Global hotkey workflow for saving clipboard images directly from Explorer
+- Replace the currently selected supported image file with the clipboard image
+- Create a new `.jpg` in the active Explorer folder when no file is selected
+- Tray app with visible current hotkey and quick access to settings
+- Customizable global hotkey from the tray menu
+- Optional `Advanced Mode` with a tabbed save dialog before writing files
+- Built-in resize controls with aspect-ratio lock and percentage presets
+- Safer file writing flow with validation for locked, missing, or unsupported targets
+- Improved clipboard handling for delayed-rendering source apps like Photoshop
+- Local error logging and defensive exception handling for more reliable background use
+
 ## ✨ What It Does
 
 - Replaces the selected image file with the clipboard image
@@ -22,11 +35,11 @@
 - `.tif`
 - `.tiff`
 
-## ⚙️ How It Works
+## ⚙️ How to Use?
 
 1. Copy any image to the clipboard.
 2. Select a target image file in Windows Explorer, or leave the folder open without a file selected.
-3. Press `Ctrl+Shift+V`.
+3. Press `Ctrl+Shift+V`, or your configured hotkey.
 
 The app saves the clipboard image into the selected file using that file's extension and format. If no file is selected, it creates a new randomly named `.jpg` in the current Explorer folder.
 
