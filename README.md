@@ -4,14 +4,15 @@
 
 🖼️ A lightweight Windows tray utility that takes the current image from your clipboard and writes it into the file currently selected in Windows Explorer.
 
-![FastClip Preview](./preview.jpg)
-
 ## Features
 
 - Save clipboard images directly into files from Windows Explorer
 - Replace the selected image or create a new file in the current folder
 - Trigger actions with a customizable global hotkey from the tray
 - Use `Advanced Mode` for resize, format selection, and optional JPEG or PNG compression before saving
+
+![FastClip Preview](./preview.jpg)
+
 - Save advanced settings and skip the dialog next time when needed
 - Built for fast, reliable clipboard-to-file workflows on Windows
 
