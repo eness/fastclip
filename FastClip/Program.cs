@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
@@ -236,8 +237,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             using var outputImage = _imageTransformPipeline.Apply(image, pasteSession.Options);
-            var savedName = SavePasteSession(outputImage, pasteSession);
-            ShowBalloon(pasteSession.TargetKind == PasteTargetKind.ExistingFile ? "Saved" : "New file created", savedName);
+            var saveResult = SavePasteSession(outputImage, pasteSession);
+            if (!string.IsNullOrWhiteSpace(saveResult.WarningMessage))
+            {
+                _errorLogger.Log(operationId, new InvalidOperationException(saveResult.WarningMessage));
+            }
+            ShowBalloon(
+                pasteSession.TargetKind == PasteTargetKind.ExistingFile ? "Saved" : "New file created",
+                saveResult.WarningMessage is null
+                    ? Path.GetFileName(saveResult.SavedPath)
+                    : $"{Path.GetFileName(saveResult.SavedPath)} ({saveResult.WarningMessage})");
         }
         catch (OperationCanceledException)
         {
@@ -255,16 +264,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private string SavePasteSession(Image image, PasteSession session)
+    private ImageSaveResult SavePasteSession(Image image, PasteSession session)
     {
         if (session.TargetKind == PasteTargetKind.ExistingFile)
         {
-            _imageFileWriter.ReplaceImageFile(image, session.ExplorerContext.SelectedFilePath!);
-            return Path.GetFileName(session.ExplorerContext.SelectedFilePath);
+            return _imageFileWriter.ReplaceImageFile(image, session.ExplorerContext.SelectedFilePath!, session.Options);
         }
 
-        var newFilePath = _imageFileWriter.CreateNewJpeg(image, session.ExplorerContext.CurrentFolderPath!);
-        return Path.GetFileName(newFilePath);
+        return _imageFileWriter.CreateNewJpeg(image, session.ExplorerContext.CurrentFolderPath!, session.Options);
     }
 
     private Task<bool> ShowAdvancedPasteDialogAsync(PasteSession session)
@@ -679,11 +686,18 @@ internal sealed class PasteSession
             : string.IsNullOrWhiteSpace(explorerContext.CurrentFolderPath)
                 ? PasteTargetKind.None
                 : PasteTargetKind.NewFile;
+        var outputExtension = targetKind == PasteTargetKind.ExistingFile
+            ? Path.GetExtension(explorerContext.SelectedFilePath!).ToLowerInvariant()
+            : targetKind == PasteTargetKind.NewFile
+                ? ".jpg"
+                : string.Empty;
+        var compressionAvailable = outputExtension is ".jpg" or ".jpeg";
 
         return new PasteSession
         {
             ExplorerContext = explorerContext,
             TargetKind = targetKind,
+            OutputExtension = outputExtension,
             Options = new PasteOptions
             {
                 Resize = new ResizeOptions
@@ -693,19 +707,27 @@ internal sealed class PasteSession
                     Width = image.Width,
                     Height = image.Height,
                     KeepAspectRatio = true
-                }
+                },
+                Compression = new CompressionOptions
+                {
+                    Enabled = compressionAvailable,
+                    AvailableForCurrentTarget = compressionAvailable,
+                    JpegQuality = 85
+                },
             }
         };
     }
 
     public required ExplorerContext ExplorerContext { get; init; }
     public required PasteTargetKind TargetKind { get; init; }
+    public required string OutputExtension { get; init; }
     public required PasteOptions Options { get; init; }
 }
 
 internal sealed class PasteOptions
 {
     public required ResizeOptions Resize { get; set; }
+    public required CompressionOptions Compression { get; set; }
 }
 
 internal sealed class ResizeOptions
@@ -717,6 +739,13 @@ internal sealed class ResizeOptions
     public required bool KeepAspectRatio { get; set; }
     public int? ScalePercent { get; set; }
     public bool IsResizeActive => Width != OriginalWidth || Height != OriginalHeight;
+}
+
+internal sealed class CompressionOptions
+{
+    public required bool Enabled { get; set; }
+    public required bool AvailableForCurrentTarget { get; set; }
+    public required int JpegQuality { get; set; }
 }
 
 internal sealed class AdvancedPasteForm : Form
@@ -733,6 +762,8 @@ internal sealed class AdvancedPasteForm : Form
     private readonly NumericUpDown _heightInput;
     private readonly AspectRatioIconButton _linkButton;
     private readonly ComboBox _scalePresetComboBox;
+    private readonly TrackBar _compressionQualityTrackBar;
+    private readonly Label _compressionQualityValueLabel;
     private readonly ToolTip _toolTip;
     private bool _isUpdatingControls;
 
@@ -757,6 +788,8 @@ internal sealed class AdvancedPasteForm : Form
 
         var resizeTab = new TabPage("Resize");
         _tabControl.TabPages.Add(resizeTab);
+        var compressionTab = new TabPage("Compress");
+        _tabControl.TabPages.Add(compressionTab);
 
         var widthLabel = new Label
         {
@@ -827,6 +860,56 @@ internal sealed class AdvancedPasteForm : Form
         resizeTab.Controls.Add(_heightInput);
         resizeTab.Controls.Add(presetLabel);
         resizeTab.Controls.Add(_scalePresetComboBox);
+
+        if (_session.Options.Compression.AvailableForCurrentTarget)
+        {
+            var compressionLabel = new Label
+            {
+                AutoSize = true,
+                Location = new Point(16, 20),
+                Text = "Quality"
+            };
+
+            _compressionQualityTrackBar = new TrackBar
+            {
+                Location = new Point(20, 44),
+                Width = 300,
+                Minimum = 0,
+                Maximum = 100,
+                TickFrequency = 10,
+                SmallChange = 1,
+                LargeChange = 5,
+                Value = _session.Options.Compression.JpegQuality
+            };
+            _compressionQualityTrackBar.ValueChanged += (_, _) => OnCompressionQualityChanged();
+
+            _compressionQualityValueLabel = new Label
+            {
+                AutoSize = true,
+                Location = new Point(326, 52),
+                Text = _session.Options.Compression.JpegQuality.ToString()
+            };
+
+            compressionTab.Controls.Add(compressionLabel);
+            compressionTab.Controls.Add(_compressionQualityTrackBar);
+            compressionTab.Controls.Add(_compressionQualityValueLabel);
+        }
+        else
+        {
+            _compressionQualityTrackBar = new TrackBar();
+            _compressionQualityValueLabel = new Label();
+
+            var unsupportedLabel = new Label
+            {
+                AutoSize = false,
+                Location = new Point(20, 24),
+                Size = new Size(315, 64),
+                Text = "Compression is currently available only for JPEG output.",
+            };
+
+            compressionTab.Enabled = false;
+            compressionTab.Controls.Add(unsupportedLabel);
+        }
 
         var cancelButton = new Button
         {
@@ -925,6 +1008,17 @@ internal sealed class AdvancedPasteForm : Form
         ApplyScaledDimensions(width, resizeBasedOnWidth: true, percent);
     }
 
+    private void OnCompressionQualityChanged()
+    {
+        if (_isUpdatingControls || !_session.Options.Compression.AvailableForCurrentTarget)
+        {
+            return;
+        }
+
+        _session.Options.Compression.JpegQuality = _compressionQualityTrackBar.Value;
+        _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
+    }
+
     private void ApplyScaledDimensions(int primaryValue, bool resizeBasedOnWidth, int? scalePercent = null)
     {
         var original = _session.Options.Resize;
@@ -989,6 +1083,11 @@ internal sealed class AdvancedPasteForm : Form
     private void OnSave()
     {
         UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, _session.Options.Resize.ScalePercent);
+        if (_session.Options.Compression.AvailableForCurrentTarget)
+        {
+            _session.Options.Compression.JpegQuality = _compressionQualityTrackBar.Value;
+            _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
+        }
     }
 
     private static int GetLinkButtonX()
@@ -1458,18 +1557,20 @@ internal sealed class ExplorerContextResolver
 internal sealed class ImageFileWriter
 {
     private const long JpegQuality = 95L;
+    private readonly MozJpegEncoder _mozJpegEncoder = new();
 
-    public void ReplaceImageFile(Image image, string targetPath)
+    public ImageSaveResult ReplaceImageFile(Image image, string targetPath, PasteOptions options)
     {
         ValidateTargetFile(targetPath);
 
         var directory = Path.GetDirectoryName(targetPath) ?? throw new InvalidOperationException("Target directory could not be determined.");
         var extension = Path.GetExtension(targetPath).ToLowerInvariant();
         var tempPath = Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(targetPath)}.{Guid.NewGuid():N}{extension}");
+        string? warningMessage = null;
 
         try
         {
-            SaveImage(image, tempPath, extension);
+            warningMessage = SaveImage(image, tempPath, extension, options);
             EnsureGeneratedFileLooksValid(tempPath);
 
             try
@@ -1493,9 +1594,11 @@ internal sealed class ImageFileWriter
         {
             TryDeleteIfExists(tempPath);
         }
+
+        return new ImageSaveResult(targetPath, warningMessage);
     }
 
-    public string CreateNewJpeg(Image image, string folderPath)
+    public ImageSaveResult CreateNewJpeg(Image image, string folderPath, PasteOptions options)
     {
         ValidateTargetDirectory(folderPath);
 
@@ -1505,13 +1608,9 @@ internal sealed class ImageFileWriter
 
             try
             {
-                using (var stream = new FileStream(candidatePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                {
-                    SaveJpeg(image, stream, JpegQuality);
-                }
-
+                var warningMessage = SaveImage(image, candidatePath, ".jpg", options);
                 EnsureGeneratedFileLooksValid(candidatePath);
-                return candidatePath;
+                return new ImageSaveResult(candidatePath, warningMessage);
             }
             catch (IOException) when (File.Exists(candidatePath))
             {
@@ -1597,7 +1696,7 @@ internal sealed class ImageFileWriter
         }
     }
 
-    private static void SaveImage(Image image, string targetPath, string extension)
+    private string? SaveImage(Image image, string targetPath, string extension, PasteOptions options)
     {
         ValidateImage(image);
 
@@ -1605,21 +1704,20 @@ internal sealed class ImageFileWriter
         {
             case ".png":
                 image.Save(targetPath, ImageFormat.Png);
-                break;
+                return null;
             case ".bmp":
                 image.Save(targetPath, ImageFormat.Bmp);
-                break;
+                return null;
             case ".gif":
                 image.Save(targetPath, ImageFormat.Gif);
-                break;
+                return null;
             case ".tif":
             case ".tiff":
                 image.Save(targetPath, ImageFormat.Tiff);
-                break;
+                return null;
             case ".jpg":
             case ".jpeg":
-                SaveJpeg(image, targetPath, JpegQuality);
-                break;
+                return SaveJpeg(image, targetPath, options);
             default:
                 throw new NotSupportedException("Only png, jpg, jpeg, bmp, gif, tif, and tiff files are supported.");
         }
@@ -1669,10 +1767,27 @@ internal sealed class ImageFileWriter
         }
     }
 
-    private static void SaveJpeg(Image image, string targetPath, long quality)
+    private string? SaveJpeg(Image image, string targetPath, PasteOptions options)
     {
+        var quality = options.Compression.Enabled && options.Compression.AvailableForCurrentTarget
+            ? options.Compression.JpegQuality
+            : (int)JpegQuality;
+
+        if (options.Compression.Enabled && options.Compression.AvailableForCurrentTarget)
+        {
+            var mozJpegResult = _mozJpegEncoder.TryEncode(image, targetPath, quality);
+            if (mozJpegResult.Success)
+            {
+                return null;
+            }
+        }
+
+        TryDeleteIfExists(targetPath);
         using var stream = new FileStream(targetPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         SaveJpeg(image, stream, quality);
+        return options.Compression.Enabled && options.Compression.AvailableForCurrentTarget
+            ? "mozjpeg unavailable, standard JPEG fallback used"
+            : null;
     }
 
     private static void SaveJpeg(Image image, Stream targetStream, long quality)
@@ -1728,6 +1843,117 @@ internal sealed class ImageFileWriter
         ".tif",
         ".tiff"
     };
+}
+
+internal sealed record ImageSaveResult(string SavedPath, string? WarningMessage);
+
+internal sealed class MozJpegEncoder
+{
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+    public MozJpegEncodeResult TryEncode(Image image, string outputPath, int quality)
+    {
+        var executablePath = MozJpegLocator.TryFindEncoder();
+        if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+        {
+            return MozJpegEncodeResult.Failed("mozjpeg executable not found.");
+        }
+
+        var tempInputPath = Path.Combine(Path.GetDirectoryName(outputPath) ?? AppContext.BaseDirectory, $"{Guid.NewGuid():N}.mozjpeg-input.png");
+
+        try
+        {
+            image.Save(tempInputPath, ImageFormat.Png);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                Arguments = $"-quality {Math.Clamp(quality, 0, 100)} -outfile \"{outputPath}\" \"{tempInputPath}\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                WorkingDirectory = Path.GetDirectoryName(executablePath) ?? AppContext.BaseDirectory
+            };
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return MozJpegEncodeResult.Failed("mozjpeg process could not be started.");
+            }
+
+            if (!process.WaitForExit((int)Timeout.TotalMilliseconds))
+            {
+                TryKill(process);
+                return MozJpegEncodeResult.Failed("mozjpeg process timed out.");
+            }
+
+            var standardError = process.StandardError.ReadToEnd();
+            var standardOutput = process.StandardOutput.ReadToEnd();
+            if (process.ExitCode != 0)
+            {
+                return MozJpegEncodeResult.Failed(string.IsNullOrWhiteSpace(standardError) ? standardOutput : standardError);
+            }
+
+            return File.Exists(outputPath)
+                ? MozJpegEncodeResult.Succeeded()
+                : MozJpegEncodeResult.Failed("mozjpeg did not create the output file.");
+        }
+        catch (Exception ex)
+        {
+            return MozJpegEncodeResult.Failed(ex.Message);
+        }
+        finally
+        {
+            TryDeleteFile(tempInputPath);
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+}
+
+internal static class MozJpegLocator
+{
+    public static string? TryFindEncoder()
+    {
+        var baseDirectory = AppContext.BaseDirectory;
+        var candidates = new[]
+        {
+            Path.Combine(baseDirectory, "Tools", "mozjpeg", "win-x64", "cjpeg-static.exe"),
+            Path.Combine(baseDirectory, "cjpeg-static.exe")
+        };
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+}
+
+internal sealed record MozJpegEncodeResult(bool Success, string? ErrorMessage)
+{
+    public static MozJpegEncodeResult Succeeded() => new(true, null);
+    public static MozJpegEncodeResult Failed(string? errorMessage) => new(false, errorMessage);
 }
 
 internal sealed record ExplorerContext(string? SelectedFilePath, string? CurrentFolderPath)
