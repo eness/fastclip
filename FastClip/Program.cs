@@ -767,7 +767,7 @@ internal sealed class AdvancedPasteForm : Form
     private readonly TrackBar _compressionQualityTrackBar;
     private readonly Label _compressionQualityValueLabel;
     private readonly Label _compressionEstimateLabel;
-    private readonly Timer _compressionEstimateTimer;
+    private readonly System.Windows.Forms.Timer _compressionEstimateTimer;
     private readonly ToolTip _toolTip;
     private readonly ImageTransformPipeline _imageTransformPipeline;
     private readonly MozJpegEncoder _mozJpegEncoder;
@@ -780,7 +780,7 @@ internal sealed class AdvancedPasteForm : Form
         _toolTip = new ToolTip();
         _imageTransformPipeline = new ImageTransformPipeline();
         _mozJpegEncoder = new MozJpegEncoder();
-        _compressionEstimateTimer = new Timer
+        _compressionEstimateTimer = new System.Windows.Forms.Timer
         {
             Interval = 400
         };
