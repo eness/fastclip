@@ -897,7 +897,7 @@ internal sealed class AboutForm : Form
         {
             Text = "Close",
             Size = new Size(94, 34),
-            Location = new Point(654, 452),
+            Location = new Point((820 - 94) / 2, 452),
             BackColor = Color.White
         };
         closeButton.Click += (_, _) => Close();
