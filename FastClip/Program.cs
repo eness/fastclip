@@ -58,10 +58,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _advancedModeMenuItem = new ToolStripMenuItem
         {
             Text = "Advanced Mode",
-            CheckOnClick = true,
             Checked = _appSettings.AdvancedModeEnabled
         };
-        _advancedModeMenuItem.CheckedChanged += (_, _) => ChangeAdvancedMode(_advancedModeMenuItem.Checked);
+        _advancedModeMenuItem.Click += (_, _) => ToggleAdvancedMode();
 
         _notifyIcon = new NotifyIcon
         {
@@ -132,14 +131,26 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ShowBalloon("Hotkey updated", $"New hotkey: {_currentHotkey.ToDisplayString()}");
     }
 
-    private void ChangeAdvancedMode(bool isEnabled)
+    private void ToggleAdvancedMode()
     {
-        if (_appSettings.AdvancedModeEnabled == isEnabled)
+        SetAdvancedMode(!_advancedModeMenuItem.Checked, resetAutoApply: true);
+    }
+
+    private void SetAdvancedMode(bool isEnabled, bool resetAutoApply)
+    {
+        if (_appSettings.AdvancedModeEnabled == isEnabled &&
+            (!resetAutoApply || !_appSettings.AutoApplyAdvancedSettings))
         {
+            _advancedModeMenuItem.Checked = isEnabled;
             return;
         }
 
-        _appSettings = _appSettings with { AdvancedModeEnabled = isEnabled };
+        _advancedModeMenuItem.Checked = isEnabled;
+        _appSettings = _appSettings with
+        {
+            AdvancedModeEnabled = isEnabled,
+            AutoApplyAdvancedSettings = resetAutoApply ? false : _appSettings.AutoApplyAdvancedSettings
+        };
         _appSettingsStore.Save(_appSettings);
     }
 
@@ -240,19 +251,30 @@ internal sealed class TrayApplicationContext : ApplicationContext
                     ApplySavedAdvancedSettings(pasteSession, _appSettings.SavedAdvancedSettings);
                 }
 
-                var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
-                if (!dialogResult.ShouldSave)
+                if (!_appSettings.AutoApplyAdvancedSettings)
                 {
-                    ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
-                    return;
-                }
+                    var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
+                    if (!dialogResult.ShouldSave)
+                    {
+                        ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
+                        return;
+                    }
 
-                _appSettings = _appSettings with
+                    _appSettings = _appSettings with
+                    {
+                        AutoApplyAdvancedSettings = dialogResult.AutoApplyNextTime,
+                        SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
+                    };
+                    _appSettingsStore.Save(_appSettings);
+                }
+                else
                 {
-                    AutoApplyAdvancedSettings = dialogResult.AutoApplyNextTime,
-                    SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
-                };
-                _appSettingsStore.Save(_appSettings);
+                    _appSettings = _appSettings with
+                    {
+                        SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
+                    };
+                    _appSettingsStore.Save(_appSettings);
+                }
             }
 
             using var outputImage = _imageTransformPipeline.Apply(image, pasteSession.Options);
