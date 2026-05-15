@@ -1,6 +1,6 @@
-![Clipboard To Selected File](./banner.jpg)
+![FastClip](./banner.jpg)
 
-# Clipboard To Selected File
+# FastClip
 
 🖼️ A lightweight Windows tray utility that takes the current image from your clipboard and writes it into the file currently selected in Windows Explorer.
 

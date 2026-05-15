@@ -10,7 +10,7 @@ jobs:
     runs-on: windows-latest
     defaults:
       run:
-        working-directory: ClipboardToSelectedFile
+        working-directory: FastClip
     steps:
       - uses: actions/checkout@v4
 
@@ -40,11 +40,11 @@ jobs:
       - name: Upload framework-dependent artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClipboardToSelectedFile-framework-dependent-win-x64
-          path: ClipboardToSelectedFile/publish/framework-dependent/
+          name: FastClip-framework-dependent-win-x64
+          path: FastClip/publish/framework-dependent/
 
       - name: Upload self-contained artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClipboardToSelectedFile-self-contained-win-x64
-          path: ClipboardToSelectedFile/publish/self-contained/
+          name: FastClip-self-contained-win-x64
+          path: FastClip/publish/self-contained/
