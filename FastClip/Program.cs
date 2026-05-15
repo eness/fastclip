@@ -695,6 +695,7 @@ internal sealed class PasteSession
 
         return new PasteSession
         {
+            SourceImage = image,
             ExplorerContext = explorerContext,
             TargetKind = targetKind,
             OutputExtension = outputExtension,
@@ -718,6 +719,7 @@ internal sealed class PasteSession
         };
     }
 
+    public required Image SourceImage { get; init; }
     public required ExplorerContext ExplorerContext { get; init; }
     public required PasteTargetKind TargetKind { get; init; }
     public required string OutputExtension { get; init; }
@@ -764,13 +766,26 @@ internal sealed class AdvancedPasteForm : Form
     private readonly ComboBox _scalePresetComboBox;
     private readonly TrackBar _compressionQualityTrackBar;
     private readonly Label _compressionQualityValueLabel;
+    private readonly Label _compressionEstimateLabel;
+    private readonly Timer _compressionEstimateTimer;
     private readonly ToolTip _toolTip;
+    private readonly ImageTransformPipeline _imageTransformPipeline;
+    private readonly MozJpegEncoder _mozJpegEncoder;
     private bool _isUpdatingControls;
+    private int _compressionEstimateVersion;
 
     public AdvancedPasteForm(PasteSession session)
     {
         _session = session;
         _toolTip = new ToolTip();
+        _imageTransformPipeline = new ImageTransformPipeline();
+        _mozJpegEncoder = new MozJpegEncoder();
+        _compressionEstimateTimer = new Timer
+        {
+            Interval = 400
+        };
+        _compressionEstimateTimer.Tick += (_, _) => StartCompressionEstimate();
+        FormClosed += (_, _) => _compressionEstimateTimer.Dispose();
 
         Text = "Advanced Paste";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -890,14 +905,24 @@ internal sealed class AdvancedPasteForm : Form
                 Text = _session.Options.Compression.JpegQuality.ToString()
             };
 
+            _compressionEstimateLabel = new Label
+            {
+                AutoSize = false,
+                Location = new Point(20, 104),
+                Size = new Size(320, 32),
+                Text = "Estimated output size: calculating..."
+            };
+
             compressionTab.Controls.Add(compressionLabel);
             compressionTab.Controls.Add(_compressionQualityTrackBar);
             compressionTab.Controls.Add(_compressionQualityValueLabel);
+            compressionTab.Controls.Add(_compressionEstimateLabel);
         }
         else
         {
             _compressionQualityTrackBar = new TrackBar();
             _compressionQualityValueLabel = new Label();
+            _compressionEstimateLabel = new Label();
 
             var unsupportedLabel = new Label
             {
@@ -936,6 +961,7 @@ internal sealed class AdvancedPasteForm : Form
         Controls.Add(saveButton);
 
         UpdatePresetSelection();
+        ScheduleCompressionEstimate();
     }
 
     private void ToggleAspectRatio()
@@ -1017,6 +1043,7 @@ internal sealed class AdvancedPasteForm : Form
 
         _session.Options.Compression.JpegQuality = _compressionQualityTrackBar.Value;
         _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
+        ScheduleCompressionEstimate();
     }
 
     private void ApplyScaledDimensions(int primaryValue, bool resizeBasedOnWidth, int? scalePercent = null)
@@ -1049,6 +1076,7 @@ internal sealed class AdvancedPasteForm : Form
         _session.Options.Resize.Height = height;
         _session.Options.Resize.ScalePercent = scalePercent;
         UpdatePresetSelection();
+        ScheduleCompressionEstimate();
     }
 
     private void UpdateControls(int width, int height, int? scalePercent)
@@ -1100,6 +1128,90 @@ internal sealed class AdvancedPasteForm : Form
     private static int GetLinkButtonY(Control alignedControl)
     {
         return alignedControl.Top + ((alignedControl.Height - LinkButtonHeight) / 2);
+    }
+
+    private void ScheduleCompressionEstimate()
+    {
+        if (!_session.Options.Compression.AvailableForCurrentTarget)
+        {
+            return;
+        }
+
+        _compressionEstimateTimer.Stop();
+        _compressionEstimateLabel.Text = "Estimated output size: calculating...";
+        _compressionEstimateTimer.Start();
+    }
+
+    private void StartCompressionEstimate()
+    {
+        _compressionEstimateTimer.Stop();
+        if (!_session.Options.Compression.AvailableForCurrentTarget || IsDisposed)
+        {
+            return;
+        }
+
+        var version = Interlocked.Increment(ref _compressionEstimateVersion);
+        var resizeWidth = _session.Options.Resize.Width;
+        var resizeHeight = _session.Options.Resize.Height;
+        var quality = _session.Options.Compression.JpegQuality;
+
+        _ = Task.Run(() =>
+        {
+            using var imageClone = new Bitmap(_session.SourceImage);
+            using var transformedImage = _imageTransformPipeline.Apply(
+                imageClone,
+                new PasteOptions
+                {
+                    Resize = new ResizeOptions
+                    {
+                        OriginalWidth = _session.Options.Resize.OriginalWidth,
+                        OriginalHeight = _session.Options.Resize.OriginalHeight,
+                        Width = resizeWidth,
+                        Height = resizeHeight,
+                        KeepAspectRatio = _session.Options.Resize.KeepAspectRatio,
+                        ScalePercent = _session.Options.Resize.ScalePercent
+                    },
+                    Compression = new CompressionOptions
+                    {
+                        Enabled = true,
+                        AvailableForCurrentTarget = true,
+                        JpegQuality = quality
+                    }
+                });
+
+            return _mozJpegEncoder.EstimateSize(transformedImage, quality);
+        }).ContinueWith(task =>
+        {
+            if (IsDisposed || version != _compressionEstimateVersion)
+            {
+                return;
+            }
+
+            if (task.IsFaulted || task.IsCanceled)
+            {
+                if (IsHandleCreated)
+                {
+                    BeginInvoke(new Action(() => _compressionEstimateLabel.Text = "Estimated output size: unavailable"));
+                }
+                return;
+            }
+
+            var estimate = task.Result;
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            BeginInvoke(new Action(() =>
+            {
+                if (IsDisposed || version != _compressionEstimateVersion)
+                {
+                    return;
+                }
+
+                _compressionEstimateLabel.Text = estimate.DisplayText;
+            }));
+        }, TaskScheduler.Default);
     }
 
     private static readonly int[] ScalePresets = [90, 80, 70, 60, 50, 40, 30, 20, 10];
@@ -1933,6 +2045,44 @@ internal sealed class MozJpegEncoder
         {
         }
     }
+
+    public CompressionEstimateResult EstimateSize(Image image, int quality)
+    {
+        var tempOutputPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.jpg");
+
+        try
+        {
+            var encodeResult = TryEncode(image, tempOutputPath, quality);
+            if (encodeResult.Success && File.Exists(tempOutputPath))
+            {
+                return CompressionEstimateResult.FromBytes(new FileInfo(tempOutputPath).Length, usedFallback: false);
+            }
+
+            using var stream = new MemoryStream();
+            SaveStandardJpeg(image, stream, quality);
+            return CompressionEstimateResult.FromBytes(stream.Length, usedFallback: true);
+        }
+        finally
+        {
+            TryDeleteFile(tempOutputPath);
+        }
+    }
+
+    private static void SaveStandardJpeg(Image image, Stream targetStream, long quality)
+    {
+        var encoder = ImageCodecInfo.GetImageEncoders()
+            .FirstOrDefault(codec => codec.FormatID == ImageFormat.Jpeg.Guid);
+
+        if (encoder is null)
+        {
+            image.Save(targetStream, ImageFormat.Jpeg);
+            return;
+        }
+
+        using var parameters = new EncoderParameters(1);
+        parameters.Param[0] = new EncoderParameter(Encoder.Quality, quality);
+        image.Save(targetStream, encoder, parameters);
+    }
 }
 
 internal static class MozJpegLocator
@@ -1954,6 +2104,18 @@ internal sealed record MozJpegEncodeResult(bool Success, string? ErrorMessage)
 {
     public static MozJpegEncodeResult Succeeded() => new(true, null);
     public static MozJpegEncodeResult Failed(string? errorMessage) => new(false, errorMessage);
+}
+
+internal sealed record CompressionEstimateResult(string DisplayText)
+{
+    public static CompressionEstimateResult FromBytes(long bytes, bool usedFallback)
+    {
+        var kiloBytes = Math.Max(1, (int)Math.Round(bytes / 1024d));
+        return new CompressionEstimateResult(
+            usedFallback
+                ? $"Estimated output size: {kiloBytes} KB (standard estimate)"
+                : $"Estimated output size: {kiloBytes} KB");
+    }
 }
 
 internal sealed record ExplorerContext(string? SelectedFilePath, string? CurrentFolderPath)
