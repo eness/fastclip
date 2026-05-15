@@ -133,13 +133,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void ToggleAdvancedMode()
     {
-        SetAdvancedMode(!_advancedModeMenuItem.Checked, resetAutoApply: true);
+        SetAdvancedMode(!_advancedModeMenuItem.Checked);
     }
 
-    private void SetAdvancedMode(bool isEnabled, bool resetAutoApply)
+    private void SetAdvancedMode(bool isEnabled)
     {
+        var nextAutoApply = isEnabled ? false : _appSettings.AutoApplyAdvancedSettings;
         if (_appSettings.AdvancedModeEnabled == isEnabled &&
-            (!resetAutoApply || !_appSettings.AutoApplyAdvancedSettings))
+            _appSettings.AutoApplyAdvancedSettings == nextAutoApply)
         {
             _advancedModeMenuItem.Checked = isEnabled;
             return;
@@ -149,7 +150,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _appSettings = _appSettings with
         {
             AdvancedModeEnabled = isEnabled,
-            AutoApplyAdvancedSettings = resetAutoApply ? false : _appSettings.AutoApplyAdvancedSettings
+            AutoApplyAdvancedSettings = nextAutoApply
         };
         _appSettingsStore.Save(_appSettings);
     }
@@ -244,37 +245,36 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 return;
             }
 
+            if (_appSettings.SavedAdvancedSettings is not null)
+            {
+                ApplySavedAdvancedSettings(pasteSession, _appSettings.SavedAdvancedSettings);
+            }
+
             if (_appSettings.AdvancedModeEnabled)
             {
-                if (_appSettings.SavedAdvancedSettings is not null)
+                var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
+                if (!dialogResult.ShouldSave)
                 {
-                    ApplySavedAdvancedSettings(pasteSession, _appSettings.SavedAdvancedSettings);
+                    ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
+                    return;
                 }
 
-                if (!_appSettings.AutoApplyAdvancedSettings)
+                _appSettings = _appSettings with
                 {
-                    var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
-                    if (!dialogResult.ShouldSave)
-                    {
-                        ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
-                        return;
-                    }
-
-                    _appSettings = _appSettings with
-                    {
-                        AutoApplyAdvancedSettings = dialogResult.AutoApplyNextTime,
-                        SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
-                    };
-                    _appSettingsStore.Save(_appSettings);
-                }
-                else
+                    AdvancedModeEnabled = !dialogResult.AutoApplyNextTime,
+                    AutoApplyAdvancedSettings = dialogResult.AutoApplyNextTime,
+                    SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
+                };
+                _advancedModeMenuItem.Checked = _appSettings.AdvancedModeEnabled;
+                _appSettingsStore.Save(_appSettings);
+            }
+            else if (_appSettings.AutoApplyAdvancedSettings && _appSettings.SavedAdvancedSettings is not null)
+            {
+                _appSettings = _appSettings with
                 {
-                    _appSettings = _appSettings with
-                    {
-                        SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
-                    };
-                    _appSettingsStore.Save(_appSettings);
-                }
+                    SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
+                };
+                _appSettingsStore.Save(_appSettings);
             }
 
             using var outputImage = _imageTransformPipeline.Apply(image, pasteSession.Options);
