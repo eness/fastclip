@@ -861,7 +861,7 @@ internal sealed class AboutForm : Form
         var descriptionLabel = new Label
         {
             AutoSize = false,
-            Location = new Point(108, 326),
+            Location = new Point(108, 316),
             Size = new Size(604, 52),
             Text = "Clipboard-to-file workflow utility for fast image replacement and export on Windows.",
             Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point),
@@ -869,18 +869,29 @@ internal sealed class AboutForm : Form
             TextAlign = ContentAlignment.MiddleCenter
         };
 
-        var websiteLink = BuildLinkLabel("enes.dev", "https://enes.dev", new Point(280, 396), new Size(92, 28));
-        var separatorLabel = new Label
+        var websiteLink = BuildLinkLabel("enes.dev", "https://enes.dev", new Point(186, 388), new Size(84, 28));
+        var separatorLabel1 = new Label
         {
             AutoSize = false,
-            Location = new Point(374, 396),
-            Size = new Size(28, 28),
+            Location = new Point(272, 388),
+            Size = new Size(20, 28),
             Text = "•",
             TextAlign = ContentAlignment.MiddleCenter,
             Font = new Font("Segoe UI", 12f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = Color.FromArgb(125, 125, 125)
         };
-        var xLink = BuildLinkLabel("x.com/enes_dev", "https://x.com/enes_dev", new Point(404, 396), new Size(136, 28));
+        var xLink = BuildLinkLabel("x.com/enes_dev", "https://x.com/enes_dev", new Point(294, 388), new Size(118, 28));
+        var separatorLabel2 = new Label
+        {
+            AutoSize = false,
+            Location = new Point(414, 388),
+            Size = new Size(20, 28),
+            Text = "•",
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 12f, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = Color.FromArgb(125, 125, 125)
+        };
+        var githubLink = BuildLinkLabel("github.com/eness/fastclip", "https://github.com/eness/fastclip", new Point(436, 388), new Size(196, 28));
 
         var closeButton = new Button
         {
@@ -895,8 +906,10 @@ internal sealed class AboutForm : Form
         Controls.Add(nameLabel);
         Controls.Add(descriptionLabel);
         Controls.Add(websiteLink);
-        Controls.Add(separatorLabel);
+        Controls.Add(separatorLabel1);
         Controls.Add(xLink);
+        Controls.Add(separatorLabel2);
+        Controls.Add(githubLink);
         Controls.Add(closeButton);
     }
 
