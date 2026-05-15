@@ -1092,7 +1092,7 @@ internal sealed class AdvancedPasteForm : Form
         _compressionEstimateTimer.Tick += (_, _) => StartCompressionEstimate();
         FormClosed += (_, _) => _compressionEstimateTimer.Dispose();
 
-        Text = "Advanced Paste";
+        Text = "FastClip - Advanced Paste";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
@@ -1176,14 +1176,14 @@ internal sealed class AdvancedPasteForm : Form
         var formatLabel = new Label
         {
             AutoSize = true,
-            Location = new Point(16, 144),
+            Location = new Point(16, 132),
             Text = "Format"
         };
 
         _formatComboBox = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Location = new Point(20, 168),
+            Location = new Point(20, 156),
             Width = 321
         };
         _formatComboBox.Items.AddRange(
