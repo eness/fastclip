@@ -235,26 +235,24 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             if (_appSettings.AdvancedModeEnabled)
             {
-                if (_appSettings.AutoApplyAdvancedSettings && _appSettings.SavedAdvancedSettings is not null)
+                if (_appSettings.SavedAdvancedSettings is not null)
                 {
                     ApplySavedAdvancedSettings(pasteSession, _appSettings.SavedAdvancedSettings);
                 }
-                else
-                {
-                    var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
-                    if (!dialogResult.ShouldSave)
-                    {
-                        ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
-                        return;
-                    }
 
-                    _appSettings = _appSettings with
-                    {
-                        AutoApplyAdvancedSettings = dialogResult.AutoApplyNextTime,
-                        SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
-                    };
-                    _appSettingsStore.Save(_appSettings);
+                var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
+                if (!dialogResult.ShouldSave)
+                {
+                    ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
+                    return;
                 }
+
+                _appSettings = _appSettings with
+                {
+                    AutoApplyAdvancedSettings = dialogResult.AutoApplyNextTime,
+                    SavedAdvancedSettings = AdvancedSettingsSnapshot.FromPasteOptions(pasteSession.Options)
+                };
+                _appSettingsStore.Save(_appSettings);
             }
 
             using var outputImage = _imageTransformPipeline.Apply(image, pasteSession.Options);
