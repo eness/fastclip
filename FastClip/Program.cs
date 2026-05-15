@@ -35,25 +35,36 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ClipboardImageProvider _clipboardImageProvider = new();
     private readonly ExplorerContextResolver _explorerContextResolver = new();
     private readonly ImageFileWriter _imageFileWriter = new();
+    private readonly ImageTransformPipeline _imageTransformPipeline = new();
     private readonly OperationCoordinator _operationCoordinator = new();
     private readonly ErrorLogger _errorLogger = new();
-    private readonly HotkeySettingsStore _hotkeySettingsStore = new();
+    private readonly AppSettingsStore _appSettingsStore = new();
     private readonly ToolStripMenuItem _hotkeyDisplayItem;
+    private readonly ToolStripMenuItem _advancedModeMenuItem;
+    private AppSettings _appSettings;
     private HotkeyRegistration _currentHotkey;
     private volatile bool _isExiting;
 
     public TrayApplicationContext()
     {
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
-        _currentHotkey = _hotkeySettingsStore.Load();
+        _appSettings = _appSettingsStore.Load();
+        _currentHotkey = _appSettings.Hotkey;
         _hotkeyDisplayItem = new ToolStripMenuItem
         {
             Enabled = false
         };
+        _advancedModeMenuItem = new ToolStripMenuItem
+        {
+            Text = "Advanced Mode",
+            CheckOnClick = true,
+            Checked = _appSettings.AdvancedModeEnabled
+        };
+        _advancedModeMenuItem.CheckedChanged += (_, _) => ChangeAdvancedMode(_advancedModeMenuItem.Checked);
 
         _notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = LoadTrayIcon(),
             Visible = true,
             Text = "Clipboard To Selected File",
             ContextMenuStrip = BuildMenu()
@@ -63,6 +74,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         if (!TryRegisterCurrentHotkey(showError: true))
         {
             _currentHotkey = HotkeyRegistration.Default;
+            _appSettings = _appSettings with { Hotkey = _currentHotkey };
+            _appSettingsStore.Save(_appSettings);
             TryRegisterCurrentHotkey(showError: false);
         }
         else
@@ -77,6 +90,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         UpdateHotkeyDisplay();
         menu.Items.Add(_hotkeyDisplayItem);
         menu.Items.Add("Change Hot Key", null, (_, _) => ChangeHotkey());
+        menu.Items.Add(_advancedModeMenuItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("How to use", null, (_, _) =>
             ShowBalloon("Usage", $"Copy an image to the clipboard, select a file in Explorer, then press {_currentHotkey.ToDisplayString()}."));
@@ -110,9 +124,21 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        _hotkeySettingsStore.Save(_currentHotkey);
+        _appSettings = _appSettings with { Hotkey = _currentHotkey };
+        _appSettingsStore.Save(_appSettings);
         UpdateHotkeyDisplay();
         ShowBalloon("Hotkey updated", $"New hotkey: {_currentHotkey.ToDisplayString()}");
+    }
+
+    private void ChangeAdvancedMode(bool isEnabled)
+    {
+        if (_appSettings.AdvancedModeEnabled == isEnabled)
+        {
+            return;
+        }
+
+        _appSettings = _appSettings with { AdvancedModeEnabled = isEnabled };
+        _appSettingsStore.Save(_appSettings);
     }
 
     private bool TryRegisterCurrentHotkey(bool showError)
@@ -140,6 +166,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void UpdateHotkeyDisplay()
     {
         _hotkeyDisplayItem.Text = $"Hotkey: {_currentHotkey.ToDisplayString()}";
+    }
+
+    private static Icon LoadTrayIcon()
+    {
+        try
+        {
+            return Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+        }
+        catch
+        {
+            return SystemIcons.Application;
+        }
     }
 
     private void TriggerHotkeyOperation()
@@ -179,22 +217,27 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             using var image = clipboardResult.Image;
             var explorerContext = await _explorerContextResolver.GetContextAsync(CancellationToken.None).ConfigureAwait(false);
+            var pasteSession = PasteSession.Create(image, explorerContext);
 
-            if (!string.IsNullOrWhiteSpace(explorerContext.SelectedFilePath))
-            {
-                _imageFileWriter.ReplaceImageFile(image, explorerContext.SelectedFilePath);
-                ShowBalloon("Saved", Path.GetFileName(explorerContext.SelectedFilePath));
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(explorerContext.CurrentFolderPath))
+            if (pasteSession.TargetKind == PasteTargetKind.None)
             {
                 ShowBalloon("No Explorer folder", "Open a Windows Explorer folder to create a new jpg file.");
                 return;
             }
 
-            var newFilePath = _imageFileWriter.CreateNewJpeg(image, explorerContext.CurrentFolderPath);
-            ShowBalloon("New file created", Path.GetFileName(newFilePath));
+            if (_appSettings.AdvancedModeEnabled)
+            {
+                var shouldSave = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
+                if (!shouldSave)
+                {
+                    ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
+                    return;
+                }
+            }
+
+            using var outputImage = _imageTransformPipeline.Apply(image, pasteSession.Options);
+            var savedName = SavePasteSession(outputImage, pasteSession);
+            ShowBalloon(pasteSession.TargetKind == PasteTargetKind.ExistingFile ? "Saved" : "New file created", savedName);
         }
         catch (OperationCanceledException)
         {
@@ -210,6 +253,38 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _errorLogger.Log(operationId, ex);
             ShowBalloon("Error", $"Operation {operationId} failed. {TrimForBalloon(ex.Message)}");
         }
+    }
+
+    private string SavePasteSession(Image image, PasteSession session)
+    {
+        if (session.TargetKind == PasteTargetKind.ExistingFile)
+        {
+            _imageFileWriter.ReplaceImageFile(image, session.ExplorerContext.SelectedFilePath!);
+            return Path.GetFileName(session.ExplorerContext.SelectedFilePath);
+        }
+
+        var newFilePath = _imageFileWriter.CreateNewJpeg(image, session.ExplorerContext.CurrentFolderPath!);
+        return Path.GetFileName(newFilePath);
+    }
+
+    private Task<bool> ShowAdvancedPasteDialogAsync(PasteSession session)
+    {
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _uiContext.Post(_ =>
+        {
+            try
+            {
+                using var dialog = new AdvancedPasteForm(session);
+                tcs.TrySetResult(dialog.ShowDialog() == DialogResult.OK);
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        }, null);
+
+        return tcs.Task;
     }
 
     private static string TrimForBalloon(string message)
@@ -322,33 +397,33 @@ internal readonly record struct HotkeyRegistration(int Id, uint Modifiers, Keys 
     }
 }
 
-internal sealed class HotkeySettingsStore
+internal sealed class AppSettingsStore
 {
     private readonly string _settingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "ClipboardToSelectedFile",
         "settings.json");
 
-    public HotkeyRegistration Load()
+    public AppSettings Load()
     {
         try
         {
             if (!File.Exists(_settingsPath))
             {
-                return HotkeyRegistration.Default;
+                return AppSettings.Default;
             }
 
             var json = File.ReadAllText(_settingsPath);
-            var model = JsonSerializer.Deserialize<HotkeySettingsModel>(json);
+            var model = JsonSerializer.Deserialize<AppSettingsModel>(json);
             if (model is null)
             {
-                return HotkeyRegistration.Default;
+                return AppSettings.Default;
             }
 
             var key = Enum.TryParse<Keys>(model.Key, ignoreCase: true, out var parsedKey) ? parsedKey : Keys.None;
             if (key == Keys.None)
             {
-                return HotkeyRegistration.Default;
+                return AppSettings.Default;
             }
 
             uint modifiers = 0;
@@ -374,18 +449,18 @@ internal sealed class HotkeySettingsStore
 
             if (modifiers == 0)
             {
-                return HotkeyRegistration.Default;
+                return AppSettings.Default;
             }
 
-            return new HotkeyRegistration(HotkeyRegistration.Default.Id, modifiers, key);
+            return new AppSettings(new HotkeyRegistration(HotkeyRegistration.Default.Id, modifiers, key), model.AdvancedModeEnabled);
         }
         catch
         {
-            return HotkeyRegistration.Default;
+            return AppSettings.Default;
         }
     }
 
-    public void Save(HotkeyRegistration hotkey)
+    public void Save(AppSettings settings)
     {
         var directory = Path.GetDirectoryName(_settingsPath);
         if (!string.IsNullOrWhiteSpace(directory))
@@ -393,13 +468,14 @@ internal sealed class HotkeySettingsStore
             Directory.CreateDirectory(directory);
         }
 
-        var model = new HotkeySettingsModel
+        var model = new AppSettingsModel
         {
-            Control = (hotkey.Modifiers & NativeMethods.MOD_CONTROL) != 0,
-            Shift = (hotkey.Modifiers & NativeMethods.MOD_SHIFT) != 0,
-            Alt = (hotkey.Modifiers & NativeMethods.MOD_ALT) != 0,
-            Win = (hotkey.Modifiers & NativeMethods.MOD_WIN) != 0,
-            Key = hotkey.Key.ToString()
+            Control = (settings.Hotkey.Modifiers & NativeMethods.MOD_CONTROL) != 0,
+            Shift = (settings.Hotkey.Modifiers & NativeMethods.MOD_SHIFT) != 0,
+            Alt = (settings.Hotkey.Modifiers & NativeMethods.MOD_ALT) != 0,
+            Win = (settings.Hotkey.Modifiers & NativeMethods.MOD_WIN) != 0,
+            Key = settings.Hotkey.Key.ToString(),
+            AdvancedModeEnabled = settings.AdvancedModeEnabled
         };
 
         var json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
@@ -407,13 +483,19 @@ internal sealed class HotkeySettingsStore
     }
 }
 
-internal sealed class HotkeySettingsModel
+internal sealed class AppSettingsModel
 {
     public bool Control { get; set; }
     public bool Shift { get; set; }
     public bool Alt { get; set; }
     public bool Win { get; set; }
     public string Key { get; set; } = Keys.V.ToString();
+    public bool AdvancedModeEnabled { get; set; }
+}
+
+internal sealed record AppSettings(HotkeyRegistration Hotkey, bool AdvancedModeEnabled)
+{
+    public static AppSettings Default { get; } = new(HotkeyRegistration.Default, false);
 }
 
 internal sealed class HotkeySettingsForm : Form
@@ -581,6 +663,308 @@ internal sealed class HotkeySettingsForm : Form
     ];
 }
 
+internal enum PasteTargetKind
+{
+    None,
+    ExistingFile,
+    NewFile
+}
+
+internal sealed class PasteSession
+{
+    public static PasteSession Create(Image image, ExplorerContext explorerContext)
+    {
+        var targetKind = !string.IsNullOrWhiteSpace(explorerContext.SelectedFilePath)
+            ? PasteTargetKind.ExistingFile
+            : string.IsNullOrWhiteSpace(explorerContext.CurrentFolderPath)
+                ? PasteTargetKind.None
+                : PasteTargetKind.NewFile;
+
+        return new PasteSession
+        {
+            ExplorerContext = explorerContext,
+            TargetKind = targetKind,
+            Options = new PasteOptions
+            {
+                Resize = new ResizeOptions
+                {
+                    OriginalWidth = image.Width,
+                    OriginalHeight = image.Height,
+                    Width = image.Width,
+                    Height = image.Height,
+                    KeepAspectRatio = true
+                }
+            }
+        };
+    }
+
+    public required ExplorerContext ExplorerContext { get; init; }
+    public required PasteTargetKind TargetKind { get; init; }
+    public required PasteOptions Options { get; init; }
+}
+
+internal sealed class PasteOptions
+{
+    public required ResizeOptions Resize { get; set; }
+}
+
+internal sealed class ResizeOptions
+{
+    public required int OriginalWidth { get; init; }
+    public required int OriginalHeight { get; init; }
+    public required int Width { get; set; }
+    public required int Height { get; set; }
+    public required bool KeepAspectRatio { get; set; }
+    public int? ScalePercent { get; set; }
+    public bool IsResizeActive => Width != OriginalWidth || Height != OriginalHeight;
+}
+
+internal sealed class AdvancedPasteForm : Form
+{
+    private readonly PasteSession _session;
+    private readonly TabControl _tabControl;
+    private readonly NumericUpDown _widthInput;
+    private readonly NumericUpDown _heightInput;
+    private readonly Button _linkButton;
+    private readonly ComboBox _scalePresetComboBox;
+    private bool _isUpdatingControls;
+
+    public AdvancedPasteForm(PasteSession session)
+    {
+        _session = session;
+
+        Text = "Advanced Paste";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterScreen;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        ClientSize = new Size(400, 260);
+
+        _tabControl = new TabControl
+        {
+            Location = new Point(16, 16),
+            Size = new Size(368, 180)
+        };
+
+        var resizeTab = new TabPage("Resize");
+        _tabControl.TabPages.Add(resizeTab);
+
+        var widthLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(16, 20),
+            Text = "Width"
+        };
+
+        _widthInput = new NumericUpDown
+        {
+            Location = new Point(20, 44),
+            Width = 115,
+            Minimum = 1,
+            Maximum = session.Options.Resize.OriginalWidth,
+            Value = session.Options.Resize.Width
+        };
+        _widthInput.ValueChanged += (_, _) => OnWidthChanged();
+
+        _linkButton = new Button
+        {
+            Location = new Point(147, 42),
+            Size = new Size(62, 26),
+            Text = session.Options.Resize.KeepAspectRatio ? "Linked" : "Free"
+        };
+        _linkButton.Click += (_, _) => ToggleAspectRatio();
+
+        var heightLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(222, 20),
+            Text = "Height"
+        };
+
+        _heightInput = new NumericUpDown
+        {
+            Location = new Point(226, 44),
+            Width = 115,
+            Minimum = 1,
+            Maximum = session.Options.Resize.OriginalHeight,
+            Value = session.Options.Resize.Height
+        };
+        _heightInput.ValueChanged += (_, _) => OnHeightChanged();
+
+        var presetLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(16, 88),
+            Text = "Scale Preset"
+        };
+
+        _scalePresetComboBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(20, 112),
+            Width = 321
+        };
+        _scalePresetComboBox.Items.Add("Custom");
+        foreach (var preset in ScalePresets)
+        {
+            _scalePresetComboBox.Items.Add($"{preset}%");
+        }
+        _scalePresetComboBox.SelectedIndexChanged += (_, _) => OnScalePresetChanged();
+
+        resizeTab.Controls.Add(widthLabel);
+        resizeTab.Controls.Add(_widthInput);
+        resizeTab.Controls.Add(_linkButton);
+        resizeTab.Controls.Add(heightLabel);
+        resizeTab.Controls.Add(_heightInput);
+        resizeTab.Controls.Add(presetLabel);
+        resizeTab.Controls.Add(_scalePresetComboBox);
+
+        var cancelButton = new Button
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(228, 212),
+            Width = 75
+        };
+
+        var saveButton = new Button
+        {
+            Text = "Save",
+            DialogResult = DialogResult.OK,
+            Location = new Point(309, 212),
+            Width = 75
+        };
+        saveButton.Click += (_, _) => OnSave();
+
+        AcceptButton = saveButton;
+        CancelButton = cancelButton;
+
+        Controls.Add(_tabControl);
+        Controls.Add(cancelButton);
+        Controls.Add(saveButton);
+
+        UpdatePresetSelection();
+    }
+
+    private void ToggleAspectRatio()
+    {
+        _session.Options.Resize.KeepAspectRatio = !_session.Options.Resize.KeepAspectRatio;
+        _linkButton.Text = _session.Options.Resize.KeepAspectRatio ? "Linked" : "Free";
+        if (_session.Options.Resize.KeepAspectRatio)
+        {
+            ApplyScaledDimensions((int)_widthInput.Value, resizeBasedOnWidth: true);
+        }
+    }
+
+    private void OnWidthChanged()
+    {
+        if (_isUpdatingControls)
+        {
+            return;
+        }
+
+        if (_session.Options.Resize.KeepAspectRatio)
+        {
+            ApplyScaledDimensions((int)_widthInput.Value, resizeBasedOnWidth: true);
+            return;
+        }
+
+        UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, null);
+    }
+
+    private void OnHeightChanged()
+    {
+        if (_isUpdatingControls)
+        {
+            return;
+        }
+
+        if (_session.Options.Resize.KeepAspectRatio)
+        {
+            ApplyScaledDimensions((int)_heightInput.Value, resizeBasedOnWidth: false);
+            return;
+        }
+
+        UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, null);
+    }
+
+    private void OnScalePresetChanged()
+    {
+        if (_isUpdatingControls)
+        {
+            return;
+        }
+
+        if (_scalePresetComboBox.SelectedItem is not string selection || selection == "Custom")
+        {
+            return;
+        }
+
+        var percent = int.Parse(selection.TrimEnd('%'));
+        var width = Math.Max(1, _session.Options.Resize.OriginalWidth * percent / 100);
+        ApplyScaledDimensions(width, resizeBasedOnWidth: true, percent);
+    }
+
+    private void ApplyScaledDimensions(int primaryValue, bool resizeBasedOnWidth, int? scalePercent = null)
+    {
+        var original = _session.Options.Resize;
+        var width = resizeBasedOnWidth ? primaryValue : Math.Max(1, (int)Math.Round(primaryValue * (original.OriginalWidth / (double)original.OriginalHeight)));
+        var height = resizeBasedOnWidth ? Math.Max(1, (int)Math.Round(width * (original.OriginalHeight / (double)original.OriginalWidth))) : primaryValue;
+
+        width = Math.Min(width, original.OriginalWidth);
+        height = Math.Min(height, original.OriginalHeight);
+
+        UpdateControls(width, height, scalePercent);
+    }
+
+    private void UpdateResizeOptions(int width, int height, int? scalePercent)
+    {
+        width = Math.Clamp(width, 1, _session.Options.Resize.OriginalWidth);
+        height = Math.Clamp(height, 1, _session.Options.Resize.OriginalHeight);
+        _session.Options.Resize.Width = width;
+        _session.Options.Resize.Height = height;
+        _session.Options.Resize.ScalePercent = scalePercent;
+        UpdatePresetSelection();
+    }
+
+    private void UpdateControls(int width, int height, int? scalePercent)
+    {
+        _isUpdatingControls = true;
+        try
+        {
+            _widthInput.Value = width;
+            _heightInput.Value = height;
+            UpdateResizeOptions(width, height, scalePercent);
+        }
+        finally
+        {
+            _isUpdatingControls = false;
+        }
+    }
+
+    private void UpdatePresetSelection()
+    {
+        _isUpdatingControls = true;
+        try
+        {
+            var percent = _session.Options.Resize.ScalePercent;
+            _scalePresetComboBox.SelectedItem = percent.HasValue ? $"{percent.Value}%" : "Custom";
+        }
+        finally
+        {
+            _isUpdatingControls = false;
+        }
+    }
+
+    private void OnSave()
+    {
+        UpdateResizeOptions((int)_widthInput.Value, (int)_heightInput.Value, _session.Options.Resize.ScalePercent);
+    }
+
+    private static readonly int[] ScalePresets = [90, 80, 70, 60, 50, 40, 30, 20, 10];
+}
+
 internal sealed class OperationCoordinator
 {
     private int _isRunning;
@@ -588,6 +972,31 @@ internal sealed class OperationCoordinator
     public bool TryBegin() => Interlocked.CompareExchange(ref _isRunning, 1, 0) == 0;
 
     public void End() => Interlocked.Exchange(ref _isRunning, 0);
+}
+
+internal sealed class ImageTransformPipeline
+{
+    public Bitmap Apply(Image sourceImage, PasteOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(sourceImage);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!options.Resize.IsResizeActive)
+        {
+            return new Bitmap(sourceImage);
+        }
+
+        var resizedImage = new Bitmap(options.Resize.Width, options.Resize.Height);
+        resizedImage.SetResolution(sourceImage.HorizontalResolution, sourceImage.VerticalResolution);
+
+        using var graphics = Graphics.FromImage(resizedImage);
+        graphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+        graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+        graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+        graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+        graphics.DrawImage(sourceImage, new Rectangle(0, 0, resizedImage.Width, resizedImage.Height));
+        return resizedImage;
+    }
 }
 
 internal sealed class ClipboardImageProvider
