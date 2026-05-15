@@ -1009,7 +1009,7 @@ internal sealed class PasteSession
     public required Image SourceImage { get; init; }
     public required ExplorerContext ExplorerContext { get; init; }
     public required PasteTargetKind TargetKind { get; init; }
-    public required string OutputExtension { get; private set; }
+    public string OutputExtension { get; private set; } = string.Empty;
     public required PasteOptions Options { get; init; }
 }
 
