@@ -828,35 +828,33 @@ internal sealed class AboutForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(420, 270);
-        BackColor = Color.FromArgb(247, 248, 244);
+        ClientSize = new Size(820, 520);
+        BackColor = Color.FromArgb(244, 247, 245);
 
         var headerPanel = new Panel
         {
             Dock = DockStyle.Top,
-            Height = 96,
-            BackColor = Color.FromArgb(230, 242, 232)
+            Height = 260,
+            BackColor = Color.FromArgb(228, 236, 230)
         };
 
-        var titleLabel = new Label
+        var bannerBox = new PictureBox
         {
-            AutoSize = false,
             Dock = DockStyle.Fill,
-            Text = "FastClip",
-            TextAlign = ContentAlignment.MiddleCenter,
-            Font = new Font("Segoe UI Semibold", 22f, FontStyle.Bold, GraphicsUnit.Point),
-            ForeColor = Color.FromArgb(34, 74, 48)
+            BackColor = Color.FromArgb(228, 236, 230),
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Image = LoadAboutBanner()
         };
 
-        headerPanel.Controls.Add(titleLabel);
+        headerPanel.Controls.Add(bannerBox);
 
         var nameLabel = new Label
         {
             AutoSize = false,
-            Location = new Point(32, 118),
-            Size = new Size(356, 24),
-            Text = "Enes Sonmez",
-            Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold, GraphicsUnit.Point),
+            Location = new Point(72, 286),
+            Size = new Size(676, 30),
+            Text = "Enes Sönmez",
+            Font = new Font("Segoe UI Semibold", 13f, FontStyle.Bold, GraphicsUnit.Point),
             ForeColor = Color.FromArgb(32, 32, 32),
             TextAlign = ContentAlignment.MiddleCenter
         };
@@ -864,22 +862,32 @@ internal sealed class AboutForm : Form
         var descriptionLabel = new Label
         {
             AutoSize = false,
-            Location = new Point(42, 146),
-            Size = new Size(336, 42),
+            Location = new Point(108, 326),
+            Size = new Size(604, 52),
             Text = "Clipboard-to-file workflow utility for fast image replacement and export on Windows.",
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point),
+            Font = new Font("Segoe UI", 10f, FontStyle.Regular, GraphicsUnit.Point),
             ForeColor = Color.FromArgb(90, 90, 90),
             TextAlign = ContentAlignment.MiddleCenter
         };
 
-        var websiteLink = BuildLinkLabel("enes.dev", "https://enes.dev", new Point(32, 198));
-        var xLink = BuildLinkLabel("x.com/enes_dev", "https://x.com/enes_dev", new Point(32, 226));
+        var websiteLink = BuildLinkLabel("enes.dev", "https://enes.dev", new Point(250, 396), new Size(120, 28));
+        var separatorLabel = new Label
+        {
+            AutoSize = false,
+            Location = new Point(380, 396),
+            Size = new Size(40, 28),
+            Text = "•",
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI", 12f, FontStyle.Regular, GraphicsUnit.Point),
+            ForeColor = Color.FromArgb(125, 125, 125)
+        };
+        var xLink = BuildLinkLabel("x.com/enes_dev", "https://x.com/enes_dev", new Point(430, 396), new Size(140, 28));
 
         var closeButton = new Button
         {
             Text = "Close",
-            Size = new Size(84, 30),
-            Location = new Point(304, 224),
+            Size = new Size(94, 34),
+            Location = new Point(654, 452),
             BackColor = Color.White
         };
         closeButton.Click += (_, _) => Close();
@@ -888,20 +896,50 @@ internal sealed class AboutForm : Form
         Controls.Add(nameLabel);
         Controls.Add(descriptionLabel);
         Controls.Add(websiteLink);
+        Controls.Add(separatorLabel);
         Controls.Add(xLink);
         Controls.Add(closeButton);
     }
 
-    private static LinkLabel BuildLinkLabel(string text, string url, Point location)
+    private static Image? LoadAboutBanner()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "banner.jpg"),
+            Path.Combine(AppContext.BaseDirectory, "..", "banner.jpg"),
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "banner.jpg")
+        };
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var fullPath = Path.GetFullPath(candidate);
+                if (File.Exists(fullPath))
+                {
+                    using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    using var sourceImage = Image.FromStream(stream);
+                    return new Bitmap(sourceImage);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return null;
+    }
+
+    private static LinkLabel BuildLinkLabel(string text, string url, Point location, Size size)
     {
         var link = new LinkLabel
         {
             AutoSize = false,
             Location = location,
-            Size = new Size(240, 24),
+            Size = size,
             Text = text,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Font = new Font("Segoe UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = new Font("Segoe UI Semibold", 10f, FontStyle.Regular, GraphicsUnit.Point),
             LinkColor = Color.FromArgb(40, 98, 72),
             ActiveLinkColor = Color.FromArgb(24, 72, 50),
             VisitedLinkColor = Color.FromArgb(40, 98, 72)
