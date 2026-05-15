@@ -255,7 +255,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 var dialogResult = await ShowAdvancedPasteDialogAsync(pasteSession).ConfigureAwait(false);
                 if (!dialogResult.ShouldSave)
                 {
-                    ShowBalloon("Cancelled", "The advanced paste operation was cancelled.");
                     return;
                 }
 
@@ -842,7 +841,7 @@ internal sealed class AboutForm : Form
         {
             Dock = DockStyle.Fill,
             BackColor = Color.FromArgb(228, 236, 230),
-            SizeMode = PictureBoxSizeMode.Zoom,
+            SizeMode = PictureBoxSizeMode.StretchImage,
             Image = LoadAboutBanner()
         };
 
@@ -1121,6 +1120,7 @@ internal sealed class AdvancedPasteForm : Form
     private readonly AspectRatioIconButton _linkButton;
     private readonly ComboBox _scalePresetComboBox;
     private readonly ComboBox _formatComboBox;
+    private readonly CheckBox _compressionEnabledCheckBox;
     private readonly TrackBar _compressionQualityTrackBar;
     private readonly Label _compressionQualityValueLabel;
     private readonly TrackBar _pngOptimizationTrackBar;
@@ -1277,6 +1277,12 @@ internal sealed class AdvancedPasteForm : Form
         resizeTab.Controls.Add(formatLabel);
         resizeTab.Controls.Add(_formatComboBox);
 
+        _compressionEnabledCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Text = "Enable compression"
+        };
+        _compressionEnabledCheckBox.CheckedChanged += (_, _) => OnCompressionEnabledChanged();
         _compressionQualityTrackBar = new TrackBar();
         _compressionQualityValueLabel = new Label();
         _pngOptimizationTrackBar = new TrackBar();
@@ -1411,6 +1417,7 @@ internal sealed class AdvancedPasteForm : Form
     private void OnCompressionQualityChanged()
     {
         if (_isUpdatingControls ||
+            !_session.Options.Compression.Enabled ||
             !_session.Options.Compression.AvailableForCurrentTarget ||
             _session.Options.Compression.TargetFormat != CompressionTargetFormat.Jpeg)
         {
@@ -1425,6 +1432,7 @@ internal sealed class AdvancedPasteForm : Form
     private void OnPngOptimizationLevelChanged()
     {
         if (_isUpdatingControls ||
+            !_session.Options.Compression.Enabled ||
             !_session.Options.Compression.AvailableForCurrentTarget ||
             _session.Options.Compression.TargetFormat != CompressionTargetFormat.Png)
         {
@@ -1433,6 +1441,18 @@ internal sealed class AdvancedPasteForm : Form
 
         _session.Options.Compression.PngOptimizationLevel = _pngOptimizationTrackBar.Value;
         _pngOptimizationValueLabel.Text = _pngOptimizationTrackBar.Value.ToString();
+        ScheduleCompressionEstimate();
+    }
+
+    private void OnCompressionEnabledChanged()
+    {
+        if (_isUpdatingControls || !_session.Options.Compression.AvailableForCurrentTarget)
+        {
+            return;
+        }
+
+        _session.Options.Compression.Enabled = _compressionEnabledCheckBox.Checked;
+        UpdateCompressionControlsEnabledState();
         ScheduleCompressionEstimate();
     }
 
@@ -1546,32 +1566,36 @@ internal sealed class AdvancedPasteForm : Form
                     var compressionLabel = new Label
                     {
                         AutoSize = true,
-                        Location = new Point(24, 46),
+                        Location = new Point(24, 78),
                         Text = "Quality"
                     };
+
+                    _compressionEnabledCheckBox.Location = new Point(24, 44);
+                    _compressionEnabledCheckBox.Checked = _session.Options.Compression.Enabled;
 
                     _compressionQualityTrackBar.Minimum = 0;
                     _compressionQualityTrackBar.Maximum = 100;
                     _compressionQualityTrackBar.TickFrequency = 10;
                     _compressionQualityTrackBar.SmallChange = 1;
                     _compressionQualityTrackBar.LargeChange = 5;
-                    _compressionQualityTrackBar.Location = new Point(24, 72);
+                    _compressionQualityTrackBar.Location = new Point(24, 104);
                     _compressionQualityTrackBar.Width = 336;
                     _compressionQualityTrackBar.ValueChanged -= CompressionQualityTrackBarValueChanged;
                     _compressionQualityTrackBar.Value = Math.Clamp(_session.Options.Compression.JpegQuality, 0, 100);
                     _compressionQualityTrackBar.ValueChanged += CompressionQualityTrackBarValueChanged;
 
                     _compressionQualityValueLabel.AutoSize = true;
-                    _compressionQualityValueLabel.Location = new Point(370, 78);
+                    _compressionQualityValueLabel.Location = new Point(370, 110);
                     _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
 
                     _compressionEstimateLabel.AutoSize = false;
-                    _compressionEstimateLabel.Location = new Point(24, 144);
+                    _compressionEstimateLabel.Location = new Point(24, 176);
                     _compressionEstimateLabel.Size = new Size(386, 40);
                     _compressionEstimateLabel.Text = "Estimated output size: calculating...";
                     _compressionEstimateLabel.ForeColor = Color.FromArgb(63, 74, 84);
 
                     _compressionTab.Controls.Add(captionLabel);
+                    _compressionTab.Controls.Add(_compressionEnabledCheckBox);
                     _compressionTab.Controls.Add(compressionLabel);
                     _compressionTab.Controls.Add(_compressionQualityTrackBar);
                     _compressionTab.Controls.Add(_compressionQualityValueLabel);
@@ -1590,41 +1614,45 @@ internal sealed class AdvancedPasteForm : Form
                     var compressionLabel = new Label
                     {
                         AutoSize = true,
-                        Location = new Point(24, 46),
+                        Location = new Point(24, 78),
                         Text = "Optimization Level"
                     };
+
+                    _compressionEnabledCheckBox.Location = new Point(24, 44);
+                    _compressionEnabledCheckBox.Checked = _session.Options.Compression.Enabled;
 
                     _pngOptimizationTrackBar.Minimum = 0;
                     _pngOptimizationTrackBar.Maximum = 6;
                     _pngOptimizationTrackBar.TickFrequency = 1;
                     _pngOptimizationTrackBar.SmallChange = 1;
                     _pngOptimizationTrackBar.LargeChange = 1;
-                    _pngOptimizationTrackBar.Location = new Point(24, 72);
+                    _pngOptimizationTrackBar.Location = new Point(24, 104);
                     _pngOptimizationTrackBar.Width = 336;
                     _pngOptimizationTrackBar.ValueChanged -= PngOptimizationTrackBarValueChanged;
                     _pngOptimizationTrackBar.Value = Math.Clamp(_session.Options.Compression.PngOptimizationLevel, 0, 6);
                     _pngOptimizationTrackBar.ValueChanged += PngOptimizationTrackBarValueChanged;
 
                     _pngOptimizationValueLabel.AutoSize = true;
-                    _pngOptimizationValueLabel.Location = new Point(370, 78);
+                    _pngOptimizationValueLabel.Location = new Point(370, 110);
                     _pngOptimizationValueLabel.Text = _pngOptimizationTrackBar.Value.ToString();
 
                     var hintLabel = new Label
                     {
                         AutoSize = false,
-                        Location = new Point(24, 122),
+                        Location = new Point(24, 154),
                         Size = new Size(386, 20),
                         Text = "Higher levels are slower and usually compress better.",
                         ForeColor = Color.FromArgb(91, 103, 112)
                     };
 
                     _compressionEstimateLabel.AutoSize = false;
-                    _compressionEstimateLabel.Location = new Point(24, 158);
+                    _compressionEstimateLabel.Location = new Point(24, 190);
                     _compressionEstimateLabel.Size = new Size(386, 44);
                     _compressionEstimateLabel.Text = "Estimated output size: calculating...";
                     _compressionEstimateLabel.ForeColor = Color.FromArgb(63, 74, 84);
 
                     _compressionTab.Controls.Add(captionLabel);
+                    _compressionTab.Controls.Add(_compressionEnabledCheckBox);
                     _compressionTab.Controls.Add(compressionLabel);
                     _compressionTab.Controls.Add(_pngOptimizationTrackBar);
                     _compressionTab.Controls.Add(_pngOptimizationValueLabel);
@@ -1644,6 +1672,8 @@ internal sealed class AdvancedPasteForm : Form
                     ForeColor = Color.FromArgb(91, 103, 112)
                 });
             }
+
+            UpdateCompressionControlsEnabledState();
         }
         finally
         {
@@ -1668,11 +1698,13 @@ internal sealed class AdvancedPasteForm : Form
         {
             if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Jpeg)
             {
+                _session.Options.Compression.Enabled = _compressionEnabledCheckBox.Checked;
                 _session.Options.Compression.JpegQuality = _compressionQualityTrackBar.Value;
                 _compressionQualityValueLabel.Text = _compressionQualityTrackBar.Value.ToString();
             }
             else if (_session.Options.Compression.TargetFormat == CompressionTargetFormat.Png)
             {
+                _session.Options.Compression.Enabled = _compressionEnabledCheckBox.Checked;
                 _session.Options.Compression.PngOptimizationLevel = _pngOptimizationTrackBar.Value;
                 _pngOptimizationValueLabel.Text = _pngOptimizationTrackBar.Value.ToString();
             }
@@ -1699,6 +1731,12 @@ internal sealed class AdvancedPasteForm : Form
         }
 
         _compressionEstimateTimer.Stop();
+        if (!_session.Options.Compression.Enabled)
+        {
+            _compressionEstimateLabel.Text = "Compression disabled.";
+            return;
+        }
+
         _compressionEstimateLabel.Text = "Estimated output size: calculating...";
         _compressionEstimateTimer.Start();
     }
@@ -1706,7 +1744,7 @@ internal sealed class AdvancedPasteForm : Form
     private void StartCompressionEstimate()
     {
         _compressionEstimateTimer.Stop();
-        if (!_session.Options.Compression.AvailableForCurrentTarget || IsDisposed)
+        if (!_session.Options.Compression.AvailableForCurrentTarget || !_session.Options.Compression.Enabled || IsDisposed)
         {
             return;
         }
@@ -1786,6 +1824,16 @@ internal sealed class AdvancedPasteForm : Form
     }
 
     private static readonly int[] ScalePresets = [90, 80, 70, 60, 50, 40, 30, 20, 10];
+
+    private void UpdateCompressionControlsEnabledState()
+    {
+        var enabled = _session.Options.Compression.AvailableForCurrentTarget && _session.Options.Compression.Enabled;
+        _compressionQualityTrackBar.Enabled = enabled && _session.Options.Compression.TargetFormat == CompressionTargetFormat.Jpeg;
+        _compressionQualityValueLabel.Enabled = _compressionQualityTrackBar.Enabled;
+        _pngOptimizationTrackBar.Enabled = enabled && _session.Options.Compression.TargetFormat == CompressionTargetFormat.Png;
+        _pngOptimizationValueLabel.Enabled = _pngOptimizationTrackBar.Enabled;
+        _compressionEstimateLabel.Enabled = enabled;
+    }
 }
 
 internal sealed record FormatOption(string Extension, string Label)
@@ -2302,7 +2350,7 @@ internal sealed class ImageFileWriter
 
             try
             {
-                var warningMessage = SaveImage(image, candidatePath, ".jpg", options);
+                var warningMessage = SaveImage(image, candidatePath, extension, options);
                 EnsureGeneratedFileLooksValid(candidatePath);
                 return new ImageSaveResult(candidatePath, warningMessage);
             }
