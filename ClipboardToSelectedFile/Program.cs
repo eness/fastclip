@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -27,7 +28,6 @@ internal static class Program
 
 internal sealed class TrayApplicationContext : ApplicationContext
 {
-    private const int HotkeyId = 0x2401;
     private static readonly TimeSpan OperationCooldown = TimeSpan.FromMilliseconds(150);
     private readonly NotifyIcon _notifyIcon;
     private readonly HotkeyWindow _window;
@@ -37,11 +37,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ImageFileWriter _imageFileWriter = new();
     private readonly OperationCoordinator _operationCoordinator = new();
     private readonly ErrorLogger _errorLogger = new();
+    private readonly HotkeySettingsStore _hotkeySettingsStore = new();
+    private readonly ToolStripMenuItem _hotkeyDisplayItem;
+    private HotkeyRegistration _currentHotkey;
     private volatile bool _isExiting;
 
     public TrayApplicationContext()
     {
         _uiContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
+        _currentHotkey = _hotkeySettingsStore.Load();
+        _hotkeyDisplayItem = new ToolStripMenuItem
+        {
+            Enabled = false
+        };
 
         _notifyIcon = new NotifyIcon
         {
@@ -52,23 +60,86 @@ internal sealed class TrayApplicationContext : ApplicationContext
         };
 
         _window = new HotkeyWindow(TriggerHotkeyOperation);
-        if (!NativeMethods.RegisterHotKey(_window.Handle, HotkeyId, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, (uint)Keys.V))
+        if (!TryRegisterCurrentHotkey(showError: true))
         {
-            ShowBalloon("Hotkey registration failed", "Ctrl+Shift+V is already in use by another application.");
+            _currentHotkey = HotkeyRegistration.Default;
+            TryRegisterCurrentHotkey(showError: false);
         }
         else
         {
-            ShowBalloon("Ready", "Press Ctrl+Shift+V to replace the selected Explorer image file with the clipboard image.");
+            ShowBalloon("Ready", $"Press {_currentHotkey.ToDisplayString()} to replace the selected Explorer image file with the clipboard image.");
         }
     }
 
     private ContextMenuStrip BuildMenu()
     {
         var menu = new ContextMenuStrip();
+        UpdateHotkeyDisplay();
+        menu.Items.Add(_hotkeyDisplayItem);
+        menu.Items.Add("Change Hot Key", null, (_, _) => ChangeHotkey());
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("How to use", null, (_, _) =>
-            ShowBalloon("Usage", "Copy an image to the clipboard, select a file in Explorer, then press Ctrl+Shift+V."));
+            ShowBalloon("Usage", $"Copy an image to the clipboard, select a file in Explorer, then press {_currentHotkey.ToDisplayString()}."));
         menu.Items.Add("Exit", null, (_, _) => ExitThread());
         return menu;
+    }
+
+    private void ChangeHotkey()
+    {
+        using var dialog = new HotkeySettingsForm(_currentHotkey);
+        if (dialog.ShowDialog() != DialogResult.OK)
+        {
+            return;
+        }
+
+        var nextHotkey = dialog.SelectedHotkey;
+        if (nextHotkey == _currentHotkey)
+        {
+            return;
+        }
+
+        var previousHotkey = _currentHotkey;
+        UnregisterHotkey(previousHotkey);
+        _currentHotkey = nextHotkey;
+
+        if (!TryRegisterCurrentHotkey(showError: false))
+        {
+            _currentHotkey = previousHotkey;
+            TryRegisterCurrentHotkey(showError: false);
+            ShowBalloon("Hotkey registration failed", $"{nextHotkey.ToDisplayString()} is already in use by another application.");
+            return;
+        }
+
+        _hotkeySettingsStore.Save(_currentHotkey);
+        UpdateHotkeyDisplay();
+        ShowBalloon("Hotkey updated", $"New hotkey: {_currentHotkey.ToDisplayString()}");
+    }
+
+    private bool TryRegisterCurrentHotkey(bool showError)
+    {
+        UpdateHotkeyDisplay();
+
+        if (NativeMethods.RegisterHotKey(_window.Handle, _currentHotkey.Id, _currentHotkey.Modifiers, (uint)_currentHotkey.Key))
+        {
+            return true;
+        }
+
+        if (showError)
+        {
+            ShowBalloon("Hotkey registration failed", $"{_currentHotkey.ToDisplayString()} is already in use by another application.");
+        }
+
+        return false;
+    }
+
+    private void UnregisterHotkey(HotkeyRegistration hotkey)
+    {
+        NativeMethods.UnregisterHotKey(_window.Handle, hotkey.Id);
+    }
+
+    private void UpdateHotkeyDisplay()
+    {
+        _hotkeyDisplayItem.Text = $"Hotkey: {_currentHotkey.ToDisplayString()}";
     }
 
     private void TriggerHotkeyOperation()
@@ -181,7 +252,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         _isExiting = true;
-        NativeMethods.UnregisterHotKey(_window.Handle, HotkeyId);
+        UnregisterHotkey(_currentHotkey);
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _window.Dispose();
@@ -216,6 +287,298 @@ internal sealed class HotkeyWindow : NativeWindow, IDisposable
             DestroyHandle();
         }
     }
+}
+
+internal readonly record struct HotkeyRegistration(int Id, uint Modifiers, Keys Key)
+{
+    public static HotkeyRegistration Default { get; } = new(0x2401, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, Keys.V);
+
+    public string ToDisplayString()
+    {
+        var parts = new List<string>();
+
+        if ((Modifiers & NativeMethods.MOD_CONTROL) != 0)
+        {
+            parts.Add("Ctrl");
+        }
+
+        if ((Modifiers & NativeMethods.MOD_SHIFT) != 0)
+        {
+            parts.Add("Shift");
+        }
+
+        if ((Modifiers & NativeMethods.MOD_ALT) != 0)
+        {
+            parts.Add("Alt");
+        }
+
+        if ((Modifiers & NativeMethods.MOD_WIN) != 0)
+        {
+            parts.Add("Win");
+        }
+
+        parts.Add(Key.ToString().ToUpperInvariant());
+        return string.Join(" + ", parts);
+    }
+}
+
+internal sealed class HotkeySettingsStore
+{
+    private readonly string _settingsPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ClipboardToSelectedFile",
+        "settings.json");
+
+    public HotkeyRegistration Load()
+    {
+        try
+        {
+            if (!File.Exists(_settingsPath))
+            {
+                return HotkeyRegistration.Default;
+            }
+
+            var json = File.ReadAllText(_settingsPath);
+            var model = JsonSerializer.Deserialize<HotkeySettingsModel>(json);
+            if (model is null)
+            {
+                return HotkeyRegistration.Default;
+            }
+
+            var key = Enum.TryParse<Keys>(model.Key, ignoreCase: true, out var parsedKey) ? parsedKey : Keys.None;
+            if (key == Keys.None)
+            {
+                return HotkeyRegistration.Default;
+            }
+
+            uint modifiers = 0;
+            if (model.Control)
+            {
+                modifiers |= NativeMethods.MOD_CONTROL;
+            }
+
+            if (model.Shift)
+            {
+                modifiers |= NativeMethods.MOD_SHIFT;
+            }
+
+            if (model.Alt)
+            {
+                modifiers |= NativeMethods.MOD_ALT;
+            }
+
+            if (model.Win)
+            {
+                modifiers |= NativeMethods.MOD_WIN;
+            }
+
+            if (modifiers == 0)
+            {
+                return HotkeyRegistration.Default;
+            }
+
+            return new HotkeyRegistration(HotkeyRegistration.Default.Id, modifiers, key);
+        }
+        catch
+        {
+            return HotkeyRegistration.Default;
+        }
+    }
+
+    public void Save(HotkeyRegistration hotkey)
+    {
+        var directory = Path.GetDirectoryName(_settingsPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var model = new HotkeySettingsModel
+        {
+            Control = (hotkey.Modifiers & NativeMethods.MOD_CONTROL) != 0,
+            Shift = (hotkey.Modifiers & NativeMethods.MOD_SHIFT) != 0,
+            Alt = (hotkey.Modifiers & NativeMethods.MOD_ALT) != 0,
+            Win = (hotkey.Modifiers & NativeMethods.MOD_WIN) != 0,
+            Key = hotkey.Key.ToString()
+        };
+
+        var json = JsonSerializer.Serialize(model, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(_settingsPath, json);
+    }
+}
+
+internal sealed class HotkeySettingsModel
+{
+    public bool Control { get; set; }
+    public bool Shift { get; set; }
+    public bool Alt { get; set; }
+    public bool Win { get; set; }
+    public string Key { get; set; } = Keys.V.ToString();
+}
+
+internal sealed class HotkeySettingsForm : Form
+{
+    private readonly CheckBox _ctrlCheckBox;
+    private readonly CheckBox _shiftCheckBox;
+    private readonly CheckBox _altCheckBox;
+    private readonly CheckBox _winCheckBox;
+    private readonly ComboBox _keyComboBox;
+    public HotkeyRegistration SelectedHotkey { get; private set; }
+
+    public HotkeySettingsForm(HotkeyRegistration currentHotkey)
+    {
+        SelectedHotkey = currentHotkey;
+        Text = "Change Hot Key";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterScreen;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        ClientSize = new Size(320, 210);
+
+        var titleLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(20, 18),
+            Text = "Select a new hotkey"
+        };
+
+        _ctrlCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Location = new Point(23, 52),
+            Text = "Ctrl"
+        };
+
+        _shiftCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Location = new Point(95, 52),
+            Text = "Shift"
+        };
+
+        _altCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Location = new Point(175, 52),
+            Text = "Alt"
+        };
+
+        _winCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Location = new Point(235, 52),
+            Text = "Win"
+        };
+
+        var keyLabel = new Label
+        {
+            AutoSize = true,
+            Location = new Point(20, 92),
+            Text = "Key"
+        };
+
+        _keyComboBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(23, 114),
+            Width = 274
+        };
+
+        foreach (var key in SupportedKeys)
+        {
+            _keyComboBox.Items.Add(key);
+        }
+
+        var okButton = new Button
+        {
+            Text = "Save",
+            DialogResult = DialogResult.OK,
+            Location = new Point(141, 160),
+            Width = 75
+        };
+        okButton.Click += (_, args) => OnSave(args);
+
+        var cancelButton = new Button
+        {
+            Text = "Cancel",
+            DialogResult = DialogResult.Cancel,
+            Location = new Point(222, 160),
+            Width = 75
+        };
+
+        AcceptButton = okButton;
+        CancelButton = cancelButton;
+
+        Controls.Add(titleLabel);
+        Controls.Add(_ctrlCheckBox);
+        Controls.Add(_shiftCheckBox);
+        Controls.Add(_altCheckBox);
+        Controls.Add(_winCheckBox);
+        Controls.Add(keyLabel);
+        Controls.Add(_keyComboBox);
+        Controls.Add(okButton);
+        Controls.Add(cancelButton);
+
+        _ctrlCheckBox.Checked = (currentHotkey.Modifiers & NativeMethods.MOD_CONTROL) != 0;
+        _shiftCheckBox.Checked = (currentHotkey.Modifiers & NativeMethods.MOD_SHIFT) != 0;
+        _altCheckBox.Checked = (currentHotkey.Modifiers & NativeMethods.MOD_ALT) != 0;
+        _winCheckBox.Checked = (currentHotkey.Modifiers & NativeMethods.MOD_WIN) != 0;
+        _keyComboBox.SelectedItem = currentHotkey.Key;
+        if (_keyComboBox.SelectedIndex < 0)
+        {
+            _keyComboBox.SelectedItem = Keys.V;
+        }
+    }
+
+    private void OnSave(EventArgs args)
+    {
+        var modifiers = 0u;
+
+        if (_ctrlCheckBox.Checked)
+        {
+            modifiers |= NativeMethods.MOD_CONTROL;
+        }
+
+        if (_shiftCheckBox.Checked)
+        {
+            modifiers |= NativeMethods.MOD_SHIFT;
+        }
+
+        if (_altCheckBox.Checked)
+        {
+            modifiers |= NativeMethods.MOD_ALT;
+        }
+
+        if (_winCheckBox.Checked)
+        {
+            modifiers |= NativeMethods.MOD_WIN;
+        }
+
+        if (modifiers == 0)
+        {
+            MessageBox.Show(this, "Select at least one modifier key.", "Invalid Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            DialogResult = DialogResult.None;
+            return;
+        }
+
+        if (_keyComboBox.SelectedItem is not Keys selectedKey)
+        {
+            MessageBox.Show(this, "Select a key.", "Invalid Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            DialogResult = DialogResult.None;
+            return;
+        }
+
+        SelectedHotkey = new HotkeyRegistration(HotkeyRegistration.Default.Id, modifiers, selectedKey);
+    }
+
+    private static readonly Keys[] SupportedKeys =
+    [
+        Keys.A, Keys.B, Keys.C, Keys.D, Keys.E, Keys.F, Keys.G, Keys.H, Keys.I, Keys.J, Keys.K, Keys.L, Keys.M,
+        Keys.N, Keys.O, Keys.P, Keys.Q, Keys.R, Keys.S, Keys.T, Keys.U, Keys.V, Keys.W, Keys.X, Keys.Y, Keys.Z,
+        Keys.D0, Keys.D1, Keys.D2, Keys.D3, Keys.D4, Keys.D5, Keys.D6, Keys.D7, Keys.D8, Keys.D9,
+        Keys.F1, Keys.F2, Keys.F3, Keys.F4, Keys.F5, Keys.F6, Keys.F7, Keys.F8, Keys.F9, Keys.F10, Keys.F11, Keys.F12
+    ];
 }
 
 internal sealed class OperationCoordinator
@@ -867,7 +1230,9 @@ internal static class NativeMethods
 {
     public const int WM_HOTKEY = 0x0312;
     public const uint MOD_CONTROL = 0x0002;
+    public const uint MOD_ALT = 0x0001;
     public const uint MOD_SHIFT = 0x0004;
+    public const uint MOD_WIN = 0x0008;
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
