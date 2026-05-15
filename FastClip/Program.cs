@@ -2111,9 +2111,33 @@ internal sealed record ClipboardReadResult(bool IsSuccess, Bitmap? Image, string
 
 internal sealed class ExplorerContextResolver
 {
+    private static readonly TimeSpan ResolveTimeout = TimeSpan.FromSeconds(2);
+
     public Task<ExplorerContext> GetContextAsync(CancellationToken cancellationToken)
     {
-        return RunStaAsync(GetContextCore, cancellationToken);
+        return GetContextWithTimeoutAsync(cancellationToken);
+    }
+
+    private async Task<ExplorerContext> GetContextWithTimeoutAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await RunStaAsync(GetContextCore, cancellationToken)
+                .WaitAsync(ResolveTimeout, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return ExplorerContext.Empty;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return ExplorerContext.Empty;
+        }
     }
 
     private static ExplorerContext GetContextCore()
