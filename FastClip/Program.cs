@@ -1574,14 +1574,14 @@ internal sealed class AdvancedPasteForm : Form
                     var hintLabel = new Label
                     {
                         AutoSize = false,
-                        Location = new Point(24, 112),
+                        Location = new Point(24, 122),
                         Size = new Size(386, 20),
                         Text = "Higher levels are slower and usually compress better.",
                         ForeColor = Color.FromArgb(91, 103, 112)
                     };
 
                     _compressionEstimateLabel.AutoSize = false;
-                    _compressionEstimateLabel.Location = new Point(24, 148);
+                    _compressionEstimateLabel.Location = new Point(24, 158);
                     _compressionEstimateLabel.Size = new Size(386, 44);
                     _compressionEstimateLabel.Text = "Estimated output size: calculating...";
                     _compressionEstimateLabel.ForeColor = Color.FromArgb(63, 74, 84);
