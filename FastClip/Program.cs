@@ -1203,7 +1203,7 @@ internal sealed class AdvancedPasteForm : Form
         _formatComboBox = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Location = new Point(20, 156),
+            Location = new Point(20, 162),
             Width = 321
         };
         _formatComboBox.Items.AddRange(
