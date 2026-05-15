@@ -777,7 +777,7 @@ internal sealed class AdvancedPasteForm : Form
 
         _linkButton = new AspectRatioIconButton
         {
-            Location = new Point(GetLinkButtonX(), GetLinkButtonY()),
+            Location = new Point(GetLinkButtonX(), GetLinkButtonY(_widthInput)),
             Size = new Size(LinkButtonWidth, LinkButtonHeight)
         };
         _linkButton.Click += (_, _) => ToggleAspectRatio();
@@ -998,9 +998,9 @@ internal sealed class AdvancedPasteForm : Form
         return gapCenter - (LinkButtonWidth / 2);
     }
 
-    private static int GetLinkButtonY()
+    private static int GetLinkButtonY(Control alignedControl)
     {
-        return InputTopY - ((LinkButtonHeight - SystemInformation.ComboBoxHeight) / 2);
+        return alignedControl.Top + ((alignedControl.Height - LinkButtonHeight) / 2);
     }
 
     private static readonly int[] ScalePresets = [90, 80, 70, 60, 50, 40, 30, 20, 10];
